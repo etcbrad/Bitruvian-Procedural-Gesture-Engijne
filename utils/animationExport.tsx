@@ -125,6 +125,25 @@ const buildSamples = (
   });
 };
 
+const buildKeyframeSamples = (
+  generatePoseAtPhase: (phase: number) => WalkingEnginePose,
+): Array<{ label: string; phase: number; timeMs: number; pose: WalkingEnginePose }> => {
+  const keyframeStops = [
+    { label: 'start', phase: 0 },
+    { label: 'quarter', phase: 0.25 },
+    { label: 'half', phase: 0.5 },
+    { label: 'three-quarter', phase: 0.75 },
+    { label: 'pre-reset', phase: 0.999 },
+  ];
+
+  const durationMs = 1;
+  return keyframeStops.map((item) => ({
+    ...item,
+    timeMs: Math.round(durationMs * item.phase),
+    pose: generatePoseAtPhase(item.phase),
+  }));
+};
+
 const buildExportSvg = (context: ExportLoopContext, pose: WalkingEnginePose): string => {
   const { x, y, width, height } = parseViewBox(context.viewBox);
   const lotteSettings = context.lotteSettings ?? DEFAULT_LOTTE_SETTINGS;
@@ -224,16 +243,9 @@ const exportKeyframesJson = async (
   fileName: string,
 ) => {
   const durationMs = makeLoopDurationMs(context.gait);
-  const keyframes = [
-    { label: 'start', phase: 0 },
-    { label: 'quarter', phase: 0.25 },
-    { label: 'half', phase: 0.5 },
-    { label: 'three-quarter', phase: 0.75 },
-    { label: 'pre-reset', phase: 0.999 },
-  ].map((item) => ({
+  const keyframes = buildKeyframeSamples(generatePoseAtPhase).map((item) => ({
     ...item,
     timeMs: Math.round(durationMs * item.phase),
-    pose: generatePoseAtPhase(item.phase),
   }));
 
   const payload = {
@@ -251,35 +263,103 @@ const exportKeyframesJson = async (
   );
 };
 
+const exportKeyframesZip = async (
+  context: ExportLoopContext,
+  generatePoseAtPhase: (phase: number) => WalkingEnginePose,
+  fileName: string,
+) => {
+  const durationMs = makeLoopDurationMs(context.gait);
+  const keyframes = buildKeyframeSamples(generatePoseAtPhase).map((item) => ({
+    ...item,
+    timeMs: Math.round(durationMs * item.phase),
+  }));
+  const { width, height } = parseViewBox(context.viewBox);
+  const previewScale = 0.5;
+  const canvas = createCanvas(width * previewScale, height * previewScale);
+  const zip = new JSZip();
+  const framesFolder = zip.folder('frames');
+
+  if (!framesFolder) throw new Error('Unable to create zip folder');
+
+  for (const keyframe of keyframes) {
+    const markup = buildExportSvg(context, keyframe.pose);
+    await imageToCanvas(canvas, markup);
+    const png = await canvasToBlob(canvas, 'image/png');
+    const frameName = `${String(keyframe.timeMs).padStart(6, '0')}-${keyframe.label}.png`;
+    framesFolder.file(frameName, png);
+    if (keyframe.phase !== 0 && keyframe.phase !== 0.999) {
+      await yieldToFrame();
+    }
+  }
+
+  zip.file(
+    'keyframes.json',
+    JSON.stringify(
+      {
+        type: 'keyframes',
+        durationMs,
+        gravityCenter: context.gravityCenter,
+        gait: context.gait,
+        idleSettings: context.idleSettings,
+        keyframes,
+        imageScale: previewScale,
+      },
+      null,
+      2,
+    ),
+  );
+
+  zip.file(
+    'manifest.json',
+    JSON.stringify(
+      {
+        type: 'keyframes-zip',
+        durationMs,
+        frameCount: keyframes.length,
+        gravityCenter: context.gravityCenter,
+        gait: context.gait,
+        includes: ['keyframes.json', 'frames/*.png'],
+        imageScale: previewScale,
+      },
+      null,
+      2,
+    ),
+  );
+
+  const blob = await zip.generateAsync({ type: 'blob' });
+  downloadBlob(blob, fileName);
+};
+
 const exportGif = async (
   context: ExportLoopContext,
   samples: LoopFrameSample[],
   fileName: string,
+  exportScale: number = 0.6,
 ) => {
   const { width, height } = parseViewBox(context.viewBox);
-  const canvas = createCanvas(width, height);
+  const canvas = createCanvas(width * exportScale, height * exportScale);
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas 2D context unavailable');
 
   let palette: number[][] | null = null;
-  const gif = GIFEncoder({ initialCapacity: width * height * 4 });
+  const gif = GIFEncoder({ initialCapacity: canvas.width * canvas.height * 4 });
   const delay = Math.max(10, Math.round(makeLoopDurationMs(context.gait) / samples.length));
 
   for (const sample of samples) {
     await imageToCanvas(canvas, buildExportSvg(context, sample.pose));
-    const imageData = ctx.getImageData(0, 0, width, height).data;
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
 
     if (!palette) {
       palette = quantize(imageData, 256);
     }
 
     const index = applyPalette(imageData, palette);
-    gif.writeFrame(index, width, height, {
+    gif.writeFrame(index, canvas.width, canvas.height, {
       palette,
       delay,
       repeat: 0,
     });
-    if ((sample.frameIndex + 1) % 4 === 0) {
+    if ((sample.frameIndex + 1) % 2 === 0) {
       await yieldToFrame();
     }
   }
@@ -292,9 +372,10 @@ const exportWebm = async (
   context: ExportLoopContext,
   samples: LoopFrameSample[],
   fileName: string,
+  exportScale: number = 0.75,
 ) => {
   const { width, height } = parseViewBox(context.viewBox);
-  const canvas = createCanvas(width, height);
+  const canvas = createCanvas(width * exportScale, height * exportScale);
   const fps = Math.max(1, Math.round(samples.length / (makeLoopDurationMs(context.gait) / 1000)));
   const stream = canvas.captureStream(fps);
   const preferredTypes = [
@@ -325,7 +406,7 @@ const exportWebm = async (
   for (const sample of samples) {
     await imageToCanvas(canvas, buildExportSvg(context, sample.pose));
     await new Promise((resolve) => window.setTimeout(resolve, frameDelay));
-    if ((sample.frameIndex + 1) % 4 === 0) {
+    if ((sample.frameIndex + 1) % 2 === 0) {
       await yieldToFrame();
     }
   }
@@ -361,7 +442,7 @@ export const exportKeyframes = async (
   context: ExportLoopContext,
   generatePoseAtPhase: (phase: number) => WalkingEnginePose,
 ): Promise<void> => {
-  await exportKeyframesJson(context, generatePoseAtPhase, `bitruvian-keyframes-${createStamp()}.json`);
+  await exportKeyframesZip(context, generatePoseAtPhase, `bitruvian-keyframes-${createStamp()}.zip`);
 };
 
 export const exportAnimatedLoop = async (
@@ -369,13 +450,14 @@ export const exportAnimatedLoop = async (
   generatePoseAtPhase: (phase: number) => WalkingEnginePose,
   fps: number,
   format: AnimatedExportFormat,
+  exportScale?: number,
 ): Promise<void> => {
   const { samples } = createExportSamples(context, generatePoseAtPhase, fps);
 
   if (format === 'gif') {
-    await exportGif(context, samples, `bitruvian-loop-${createStamp()}.gif`);
+    await exportGif(context, samples, `bitruvian-loop-${createStamp()}.gif`, exportScale ?? 0.6);
     return;
   }
 
-  await exportWebm(context, samples, `bitruvian-loop-${createStamp()}.webm`);
+  await exportWebm(context, samples, `bitruvian-loop-${createStamp()}.webm`, exportScale ?? 0.75);
 };

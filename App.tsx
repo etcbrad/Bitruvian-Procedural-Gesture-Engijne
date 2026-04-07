@@ -221,10 +221,15 @@ const App: React.FC = () => {
   const gaitModeRef = useRef<GaitMode>('jog');
   const strideEntryStyleRef = useRef<StrideEntryStyle>('tiptoe');
   const gaitBaseRef = useRef<WalkingEngineGait>(normalizeGaitModeEnvelope(gait, gaitMode));
+  const isPausedRef = useRef(isPaused);
 
   useEffect(() => {
     library.init();
   }, []);
+
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+  }, [isPaused]);
 
   const logSystem = (msg: string) => setSystemLogs(p => [...p.slice(-15), { timestamp: new Date().toLocaleTimeString(), message: msg }]);
 
@@ -404,8 +409,12 @@ const App: React.FC = () => {
     if (!pendingExport) return;
     let cancelled = false;
     const context = buildExportContext();
+    const shouldRestorePause = !isPausedRef.current;
 
     const run = async () => {
+      if (shouldRestorePause) {
+        setIsPaused(true);
+      }
       setIsExporting(true);
       try {
         if (pendingExport.mode === 'frames') {
@@ -413,12 +422,14 @@ const App: React.FC = () => {
           await exportLoopFrames(context, generatePoseAtPhase, exportFps);
           if (!cancelled) logSystem('Export complete: frames zip');
         } else if (pendingExport.mode === 'keyframes') {
-          logSystem('Export: keyframes json');
+          logSystem('Export: keyframes zip');
           await exportKeyframes(context, generatePoseAtPhase);
-          if (!cancelled) logSystem('Export complete: keyframes json');
+          if (!cancelled) logSystem('Export complete: keyframes zip');
         } else {
           logSystem(`Export: animated ${exportFormat.toUpperCase()}`);
-          await exportAnimatedLoop(context, generatePoseAtPhase, exportFps, exportFormat);
+          const animatedExportFps = exportFormat === 'gif' ? Math.min(12, exportFps) : exportFps;
+          const animatedExportScale = exportFormat === 'gif' ? 0.6 : 0.75;
+          await exportAnimatedLoop(context, generatePoseAtPhase, animatedExportFps, exportFormat, animatedExportScale);
           if (!cancelled) logSystem(`Export complete: animated ${exportFormat.toUpperCase()}`);
         }
       } catch (error) {
@@ -428,6 +439,9 @@ const App: React.FC = () => {
         if (!cancelled) {
           setIsExporting(false);
           setPendingExport(null);
+          if (shouldRestorePause) {
+            setIsPaused(false);
+          }
         }
       }
     };
@@ -510,7 +524,7 @@ const App: React.FC = () => {
                    disabled={isExporting}
                    className="w-full py-2 bg-white border border-selection text-[8px] font-black uppercase hover:bg-shell disabled:opacity-50"
                  >
-                   Keyframes JSON
+                   Keyframes ZIP
                  </button>
                </div>
                <div className="flex items-center gap-2">
