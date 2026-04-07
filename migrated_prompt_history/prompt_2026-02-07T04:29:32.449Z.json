@@ -1,0 +1,459 @@
+[
+  {
+    "id": 237,
+    "author": "user",
+    "payload": {
+      "type": "text",
+      "text": "To implement real-time motion capture from video that maps directly to your procedural sliders, you can integrate **MediaPipe Pose** or **MoveNet** (via **TensorFlow.js**) into your existing **Bitruvian** architecture. These tools perform inference locally in the browser and provide 3D skeletal keypoints that can be used to mathematically drive your **Joint Bias** and **Gait** sliders.\n\n### 1. Recommended Core MoCap Engines\n\nFor real-time, glitch-free local performance, the following open-source frameworks are the industry standard for web-based pose estimation:\n\n* **[MediaPipe Pose (BlazePose)](https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker)**: Google’s state-of-the-art solution that tracks **33 body landmarks** at 30+ FPS on a standard webcam. It provides true 3D positions with depth information relative to the hips, which is essential for accurately mapping Z-depth movement (like steps toward the camera).\n* **[MoveNet (TensorFlow.js)](https://blog.tensorflow.org/2021/05/next-generation-pose-detection-with-movenet-and-tensorflowjs.html)**: An ultra-fast model capable of running at **50+ FPS**. It is highly resistant to \"glitching\" during fast movements (like punches or kicks) and works well on older hardware where performance is a priority.\n* **[Sports2D](https://github.com/davidpagnon/Sports2D)**: A specialized library that converts raw pixel coordinates into **biomechanical joint angles** (e.g., knee flexion, hip extension) in real time. This would serve as a bridge, translating video data directly into the degree values used in your **Joint Bias Matrix**.\n\n### 2. Implementation: Mapping Video to Sliders\n\nTo ensure \"glitch-free\" real-time performance, you must bypass the standard UI event loop and feed the pose data directly into your engine's **Kinetic Intensity** and **Joint Bias** buffers.\n\n| MoCap Output | Proposed Bitruvian Mapping | Goal |\n| --- | --- | --- |\n| **Shoulder-to-Elbow Angle** | `L·ELBOW` / `R·ELBOW` Bias | Real-time arm positioning for punches/guards. |\n| **Hip-to-Knee Angle** | `L·KNEE` / `R·KNEE` Bias | Correcting \"backward\" joint rotation with biomechanical limits. |\n| **Vertical Hip Velocity** | `CENTER OF MASS` slider | Automatic \"crouch\" detection during jumping or landing. |\n| **Landmark Confidence Score** | `KINETIC WEIGHT` (%) | Automatically dampens the movement if the video becomes blurry or occluded to prevent glitches. |\n\n### 3. Preventing \"Glitches\" Locally\n\n* **Use WebWorker or OffscreenCanvas**: Run the pose estimation model (MediaPipe/MoveNet) in a separate thread from your animation engine. This prevents the UI from stuttering while the AI processes frames.\n* **Temporal Smoothing (Kalman Filter)**: Don't map raw coordinates directly. Use a simple smoothing algorithm to average the last 3–5 frames, which removes the \"shiver\" typical of AI pose detection.\n* **Coordinate-to-Angle Conversion**: Use [Inverse Kinematics (IK)](https://github.com/haruiz/RiggingJs) to ensure the mannequin’s limbs follow the video's landmarks while respecting your physical constraints (e.g., locking feet to the floor).\n",
+      "files": [],
+      "fileUploads": [],
+      "cssBlocks": [],
+      "cMarkNode": {}
+    },
+    "createdTimestamp": {
+      "seconds": 1770438181,
+      "nanos": 625000000
+    }
+  },
+  {
+    "id": 238,
+    "author": "model",
+    "payload": {
+      "type": "thinking",
+      "text": "**Defining Core Doll Structure**\n\nOkay, I'm working on the Bitruvius engine's core doll design. I've pinpointed red dots as anchor points and the olive collar as the parent for the limbs and head. The goal is to implement Bitruvius 0.2's Environmental Roadmap while preserving the original Phase 0.1 core motion mechanics. I'm focusing on structural integrity.\n\n\n**Refining Kinematic Controls**\n\nI've implemented elastic ankle constraints, aiming for a rubber-band feel with tension visuals. Multi-pin safeguards, specifically Auto-B/Auto-S, are now active. I've also redesigned the doll geometry with a flattened head, lowered shoulder anchors, and adjusted hand/foot arrowhead shapes. There are now 5 joint behavior modes: Locked, Stretch, Curl, Tense, and Loose. Logical chain selection via triple-click is implemented, and the legend and HUD are updated.\n\n\n**Synthesizing Updated Design**\n\nI'm synthesizing updated design specifications for Bitruvius 0.2, focusing on the environmental roadmap and geometry redesign based on user prompt updates. I've noted a need to merge different versions of files like `utils/microScripts.ts` and `utils/behaviorEngine.ts` to produce a current version. The priority is implementing the flattened head, lowered shoulders, and arrowhead hands/feet, alongside elastic ankle constraints and the global floor plane.\n\n\n**Refining Mode and Interaction**\n\nOkay, I'm now honing the joint behavioral modes. I've updated the `JointMode` enum and `JointModesState` in `types.ts`, and I'm cycling through modes with a double-click. For interaction, single-click selects, triple-click chain-selects, and hold-and-drag moves parts. I'm updating `constants.ts` to reflect the new geometry, and `components/Bone.tsx` is being adjusted for the flattened head and arrowhead tweaks. I need to implement the elastic constraint logic and interaction handler refactor.\n\n\n**Adjusting Body Geometry**\n\nI'm now focusing on refining the geometry within `Bone.tsx` and `constants.ts`. The head is now a flattened wedge as requested, with the base width updated to 0.25 and the top width to 0.55. I've also lowered the shoulder anchors in `constants.ts` by the collar length, and am now confirming the shoulder positioning in Mannequin.tsx. My goal is to precisely reflect the new shape descriptions in the underlying code.\n\n\n",
+      "cMarkNode": {}
+    },
+    "createdTimestamp": {
+      "seconds": 1770438181,
+      "nanos": 625000000
+    },
+    "doneTimestamp": {
+      "seconds": 1770438214,
+      "nanos": 283000000
+    }
+  },
+  {
+    "id": 239,
+    "author": "model",
+    "payload": {
+      "type": "generationTable",
+      "entries": [
+        {
+          "path": "types.ts",
+          "generationType": 1,
+          "isDone": true,
+          "description": "Add JointBehavior enum and update JointModesState for the new behavior system.",
+          "diffs": [
+            {
+              "target": "",
+              "replacement": "\nexport type Vector2D = { x: number; y: number; };\n\nexport type Pose = {\n  root: Vector2D;\n  bodyRotation: number;\n  waist: number;\n  torso: number;\n  collar: number;\n  head: number;\n  lShoulder: number;\n  lForearm: number;\n  lWrist: number;\n  rShoulder: number;\n  rForearm: number;\n  rWrist: number;\n  lThigh: number;\n  lCalf: number;\n  lAnkle: number;\n  rThigh: number;\n  rCalf: number;\n  rAnkle: number;\n  lToe: number;\n  rToe: number;\n  offsets?: Partial<Record<PartName, Vector2D>>;\n};\n\nexport type WalkingEnginePose = {\n  bodyRotation: number;\n  waist: number;\n  neck: number; collar: number; torso: number;\n  l_shoulder: number; r_shoulder: number;\n  l_elbow: number; r_elbow: number;\n  l_hand: number; r_hand: number;\n  l_hip: number; r_hip: number;\n  l_knee: number; r_knee: number;\n  l_foot: number; r_foot: number;\n  l_toe: number; r_toe: number;\n  stride_phase: number;\n  y_offset: number;\n  x_offset: number;\n  collarYOffset?: number;\n  l_toe_y_offset?: number;\n  r_toe_y_offset?: number;\n};\n\nexport enum JointBehavior {\n  Locked = 'Locked',\n  Stretch = 'Stretch',\n  Curl = 'Curl',\n  Tense = 'Tense',\n  Loose = 'Loose'\n}\n\nexport type JointModesState = Partial<Record<PartName, JointBehavior>>;\n\nexport type WalkingEngineGait = {\n  intensity: number;\n  frequency: number;\n  stride: number;\n  lean: number;\n  upper_body_lean: number;\n  hip_sway: number;\n  waist_twist: number;\n  arm_swing: number;\n  elbow_bend: number;\n  gravity: number;\n  verticality: number;\n  kick_up_force: number;\n  foot_roll: number;\n  hover_height: number;\n  toe_bend: number;\n  torso_swivel: number;\n  head_spin: number;\n  footDrag: number;\n  footSpring: number;\n  headAutoBend: number;\n  headAutoStretch: number;\n  handsAutoBend: number;\n  handsAutoStretch: number;\n  feetAutoBend: number;\n  feetAutoStretch: number;\n  heavyStomp: number;\n  headVelocitySensitivity: number;\n  elbowFlexibility: number;\n  elbowMinBend: number;\n  elbowMaxBend: number;\n  arm_spread: number;\n};\n\nexport enum PartName {\n  Waist = 'waist',\n  Torso = 'torso',\n  Collar = 'collar',\n  Head = 'neck',\n  RShoulder = 'r_shoulder',\n  RElbow = 'r_elbow',\n  RWrist = 'r_hand',\n  LShoulder = 'l_shoulder',\n  LElbow = 'l_elbow',\n  LWrist = 'l_hand',\n  RThigh = 'r_hip',\n  RKnee = 'r_knee',\n  RAnkle = 'r_foot',\n  LThigh = 'l_hip',\n  LKnee = 'l_knee',\n  LAnkle = 'l_foot',\n  RToe = 'r_toe',\n  LToe = 'l_toe',\n}\n\nexport type ProportionDimension = { w: number; h: number };\nexport type WalkingEngineProportions = {\n  head: ProportionDimension;\n  collar: ProportionDimension;\n  torso: ProportionDimension;\n  waist: ProportionDimension;\n  l_upper_arm: ProportionDimension;\n  l_lower_arm: ProportionDimension;\n  l_hand: ProportionDimension;\n  r_upper_arm: ProportionDimension;\n  r_lower_arm: ProportionDimension;\n  r_hand: ProportionDimension;\n  l_upper_leg: ProportionDimension;\n  l_lower_leg: ProportionDimension;\n  l_foot: ProportionDimension;\n  l_toe: ProportionDimension;\n  r_upper_leg: ProportionDimension;\n  r_lower_leg: ProportionDimension;\n  r_foot: ProportionDimension;\n  r_toe: ProportionDimension;\n};\n\nexport type IdleSettings = {\n  breathing: number;\n  weightShift: number;\n  gazeSway: number;\n  tension: number;\n  fidgetFrequency: number;\n  transitionSpeed: number;\n  posture: number;\n  idlePinnedFeet: 'left' | 'right' | 'both' | 'none';\n};\n\nexport type LotteSettings = {\n  enabled: boolean;\n  frameStepping: boolean;\n  cutoutSnap: boolean;\n  paperJitter: boolean;\n  shadowBlur: boolean;\n  profileLock: boolean;\n};\n\nexport type PhysicsControls = {\n  motionSmoothing: number;\n  jointElasticity: number;\n  stabilization: number;\n  impactDamping: number;\n  bodyMass: number;\n  pendulumDrag: number;\n  bounceIntensity: number;\n};\n\nexport type CharacterMorphology = {\n  id: string;\n  name: string;\n  type: 'biped' | 'quadruped' | 'creature' | 'abstract';\n  anatomy: {\n    limbCount: number;\n    limbPairs: { name: string; type: 'leg' | 'arm' | 'wing' | 'fin' | 'tentacle'; count: number }[];\n    centerOfMass: number;\n    bodyLength: number;\n    limbLength: number;\n    symmetry: 'bilateral' | 'radial' | 'asymmetric';\n  };\n  gaitDNA: GaitGenome;\n  constraints: {\n    maxSpeed: number;\n    minSpeed: number;\n    maxTurnRate: number;\n    legStepHeight: number;\n    footClearance: number;\n    strikeType: 'heel' | 'toe' | 'flat' | 'midfoot';\n  };\n  description: string;\n  tags: string[];\n};\n\nexport type GaitGenome = {\n  stride: GaitParameter;\n  frequency: GaitParameter;\n  amplitude: GaitParameter;\n  phaseLags: number[];\n  footFall: string;\n  bodyRoll: GaitParameter;\n  bodyPitch: GaitParameter;\n  bodyBounce: GaitParameter;\n  ankleFlexion: GaitParameter;\n  kneeFlexion: GaitParameter;\n  hipSwing: GaitParameter;\n  shoulderSwing: GaitParameter;\n  energyCost: number;\n  stability: number;\n  agility: number;\n  idleMovement: number;\n  anxiousness: number;\n  confidence: number;\n  weight: number;\n};\n\nexport type GaitParameter = {\n  base: number;\n  speed: number;\n  variance: number;\n  responsiveness: number;\n};\n\nexport type MicroScriptInstance = {\n  id: string;\n  scriptId: string;\n  startTime: number;\n  weight: number;\n  duration: number;\n};\n"
+            }
+          ]
+        },
+        {
+          "path": "constants.ts",
+          "generationType": 1,
+          "isDone": false,
+          "description": "Update anatomy constants for redesigned flattened head and lower shoulder anchors.",
+          "errorWhileGenerating": true
+        }
+      ]
+    },
+    "createdTimestamp": {
+      "seconds": 1770438214,
+      "nanos": 283000000
+    },
+    "doneTimestamp": {
+      "seconds": 1770438222,
+      "nanos": 916000000
+    }
+  },
+  {
+    "id": 240,
+    "author": "model",
+    "payload": {
+      "type": "error",
+      "error": "An internal error occurred.",
+      "metadata": {
+        "message": "Failed to run code assistant. Please try again."
+      },
+      "isCancelError": false,
+      "isLoopingError": false
+    },
+    "createdTimestamp": {
+      "seconds": 1770438228,
+      "nanos": 213000000
+    },
+    "doneTimestamp": {
+      "seconds": 1770438228,
+      "nanos": 213000000
+    }
+  },
+  {
+    "id": 242,
+    "author": "user",
+    "payload": {
+      "type": "text",
+      "text": "There was an unexpected error. Finish what you were doing.",
+      "files": [],
+      "fileUploads": [],
+      "cssBlocks": [],
+      "cMarkNode": {}
+    },
+    "createdTimestamp": {
+      "seconds": 1770438233,
+      "nanos": 842000000
+    }
+  },
+  {
+    "id": 243,
+    "author": "model",
+    "payload": {
+      "type": "thinking",
+      "text": "",
+      "errorWhileThinking": true
+    },
+    "createdTimestamp": {
+      "seconds": 1770438233,
+      "nanos": 842000000
+    },
+    "doneTimestamp": {
+      "seconds": 1770438253,
+      "nanos": 610000000
+    }
+  },
+  {
+    "id": 244,
+    "author": "model",
+    "payload": {
+      "type": "error",
+      "error": "An internal error occurred.",
+      "metadata": {
+        "message": "Failed to run code assistant. Please try again."
+      },
+      "isCancelError": false,
+      "isLoopingError": false
+    },
+    "createdTimestamp": {
+      "seconds": 1770438253,
+      "nanos": 610000000
+    },
+    "doneTimestamp": {
+      "seconds": 1770438253,
+      "nanos": 610000000
+    }
+  },
+  {
+    "id": 245,
+    "author": "user",
+    "payload": {
+      "type": "text",
+      "text": "There was an unexpected error. Finish what you were doing.",
+      "files": [],
+      "fileUploads": [],
+      "cssBlocks": [],
+      "cMarkNode": {}
+    },
+    "createdTimestamp": {
+      "seconds": 1770438256,
+      "nanos": 479000000
+    }
+  },
+  {
+    "id": 246,
+    "author": "model",
+    "payload": {
+      "type": "thinking",
+      "text": "",
+      "errorWhileThinking": true
+    },
+    "createdTimestamp": {
+      "seconds": 1770438256,
+      "nanos": 479000000
+    },
+    "doneTimestamp": {
+      "seconds": 1770438257,
+      "nanos": 856000000
+    }
+  },
+  {
+    "id": 247,
+    "author": "model",
+    "payload": {
+      "type": "error",
+      "error": "An internal error occurred.",
+      "metadata": {
+        "message": "Failed to run code assistant. Please try again."
+      },
+      "isCancelError": false,
+      "isLoopingError": false
+    },
+    "createdTimestamp": {
+      "seconds": 1770438257,
+      "nanos": 857000000
+    },
+    "doneTimestamp": {
+      "seconds": 1770438257,
+      "nanos": 857000000
+    }
+  },
+  {
+    "id": 248,
+    "author": "user",
+    "payload": {
+      "type": "text",
+      "text": "retry\n",
+      "files": [],
+      "fileUploads": [],
+      "cssBlocks": [],
+      "cMarkNode": {}
+    },
+    "createdTimestamp": {
+      "seconds": 1770438335,
+      "nanos": 344000000
+    }
+  },
+  {
+    "id": 249,
+    "author": "model",
+    "payload": {
+      "type": "thinking",
+      "text": "**Analyzing the Foundation**\n\nI'm currently focused on dissecting the user's description. The red dots are definitely anchors, defining the pivot points of this design. I'm also confirming the olive-colored collar acts as the parent object, governing the arms and the. This helps in mapping out the hierarchy of the design, which is key. I'm building this as a series of parent-child relationships.\n\n\n**Refining the Hierarchy**\n\nI'm now implementing the redesigned doll's core structure. I'm focusing on the modifications to `Mannequin.tsx`, `Bone.tsx`, `constants.ts`, and `types.ts`, specifically addressing the \"red dot\" anchors and the olive-colored collar's role. I'm also addressing \"flattened head\" and \"lower shoulder anchors\" mentioned in the feedback. The rubber-band physics for ankles and high-luminance Pinkish-Red visuals for the dynamic anchors are next. The existing kinetic properties remain unchanged.\n\n\n**Revisiting Previous Assumptions**\n\nI'm now integrating the user's past feedback, specifically noting the inclusion of `JointBehavior` and `JointModesState` from the failed XML snippet. I'm cross-referencing this with the `constants.ts` updates for the \"flattened head\" and \"lower shoulder anchors\". I'm also refining the anchor visuals within `Bone.tsx`, using high-luminance pinkish-red, scaled by `tensionFactor`. I'm making sure to ensure the collar's visual and hierarchy are correct by checking `Mannequin.tsx`. I'm also reviewing `App.tsx` and other provided files.\n\n\n**Updating the 'Flattened Head'**\n\nI'm now incorporating the new \"flattened head\" shape within `Bone.tsx`, ensuring `HEAD_BASE_WIDTH` and `HEAD_TOP_WIDTH` from `constants.ts` are utilized for the inverted wedge. The 'head-tall-oval' variant is being modified to accurately reflect this shape. I'm confirming that the collar's olive coloration and hierarchical placement are correctly implemented in `Mannequin.tsx`. I'm also reviewing potential inconsistencies in other provided files.\n\n\n**Implementing Ankle Constraints**\n\nI'm now focusing on elastic ankle constraints. The ground calculations in `groundingEngine.ts` are key. I must decouple pinned coordinates from the anatomical ankle joint. I'm reviewing `Bone.tsx` once again. I've re-examined the dynamic anchor visuals, noting the color, scale, and opacity logic tied to `tensionFactor`. I'm going to integrate this with the elastic ankle calculations.\n\n\n**Verifying the Parenting**\n\nI'm now verifying the \"olive collar's\" role and visibility within `Mannequin.tsx`. I see the head is parented to the collar's end, while the arms are at the start (offset). This differs from typical collar bone structure. I'm confirming that the calculations accurately reflect this parenting structure. I'm ensuring both the visual representation and hierarchical relationships align as intended by reviewing the code.\n\n\n**Refining Collar's Topology**\n\nI'm now focusing on the collar's end point as the parent, especially concerning how both head and arms attach. I've noted the difference from the typical clavicle-shoulder structure. Also, I am confirming the calculations use `-collarDrawLen` (top of the collar) in `Mannequin.tsx`. I am also working on re-checking `Bone.tsx` to handle `HEAD_BASE_WIDTH` and `HEAD_TOP_WIDTH` from `constants.ts` with the \"head-tall-oval\" path.\n\n\n**Updating Anchor Visuals**\n\nI'm now changing the default anchor color to a more vibrant red, considering the user's explicit request. I am setting `COLORS.ANCHOR_DEFAULT` to a reddish tint in `Bone.tsx`, and making them more prominent, even without tension. I am also making sure the \"Flattened Head\" shape is correct. The collar's hierarchy is also being reconfirmed.\n\n\n**Adjusting Head Dimensions**\n\nI'm now integrating the `HEAD_BASE_WIDTH` and `HEAD_TOP_WIDTH` ratios. In `Bone.tsx`, I'll update the `head-tall-oval` path to use these proportions, considering how it uses the `width` prop from `ANATOMY.HEAD_WIDTH`. I will update `partDefinitions` in `Mannequin.tsx` to use `HEAD_TOP_WIDTH` as the head bone's primary width. The olive collar's visibility remains correct. I'll make sure the collar correctly parents the head and arms.\n\n\n**Implementing Visual Anchors**\n\nI'm now changing the default anchor color to \"#EF4444\" in `Bone.tsx`, and ensuring the ankle constraints' elasticity is correctly reflected. I am checking `groundingEngine.ts` to ensure the elastic logic integrates seamlessly with the anchor visuals, scaling them appropriately. I will then review the `head-tall-oval` and `hand-foot-arrowhead-shape` to adjust their paths, and widths.\n\n\n**Defining Pivot Offsets**\n\nI'm now focusing on `types.ts`, verifying that `WalkingEnginePivotOffsets` is clearly defined as it seems integral. I'm noting `Mannequin` uses `keyof WalkingEnginePivotOffsets`, suggesting a strong link. I'll make sure `WalkingEnginePose` includes rotations, with the offsets mapping them. The updates to `constants.ts` and `Bone.tsx` are next.\n\n\n",
+      "cMarkNode": {}
+    },
+    "createdTimestamp": {
+      "seconds": 1770438335,
+      "nanos": 344000000
+    },
+    "doneTimestamp": {
+      "seconds": 1770438356,
+      "nanos": 988000000
+    }
+  },
+  {
+    "id": 250,
+    "author": "model",
+    "payload": {
+      "type": "generationTable",
+      "entries": [
+        {
+          "path": "constants.ts",
+          "generationType": 1,
+          "isDone": true,
+          "description": "Update anatomy constants for the redesign: flattened head dimensions and lowered shoulder rig.",
+          "diffs": [
+            {
+              "target": "",
+              "replacement": "\nimport { PartName } from './types';\n\nexport const SCALE_FACTOR = 1; \nexport const BASE_HEAD_UNIT = 50; \n\nexport const ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT = {\n  HEAD: 0.8, \n  HEAD_BASE_WIDTH: 0.25, // Redesigned base width (neck)\n  HEAD_TOP_WIDTH: 0.55,  // Redesigned skull width (top)\n  COLLAR: 0.4, \n  COLLAR_WIDTH: 0.75, \n  TORSO: 1.2, \n  TORSO_WIDTH: 0.65, \n  WAIST: 1.0, \n  WAIST_WIDTH: 0.85, \n  UPPER_ARM: 1.8, \n  LOWER_ARM: 1.4, \n  HAND: 0.8, \n  LEG_UPPER: 2.2, \n  LEG_LOWER: 1.8, \n  FOOT: 0.9, \n  TOE: 0.15, \n  SHOULDER_WIDTH: 1.2, \n  HIP_WIDTH: 1.0, \n  ROOT_SIZE: 0.25,\n  HEAD_WIDTH: 0.55, // Skull width as primary\n  LIMB_WIDTH_ARM: 0.22, \n  LIMB_WIDTH_FOREARM: 0.18, \n  LIMB_WIDTH_THIGH: 0.45, \n  LIMB_WIDTH_CALF: 0.18, \n  HAND_WIDTH: 0.2, \n  FOOT_WIDTH: 0.25, \n  TOE_WIDTH: 0.25, \n  EFFECTOR_WIDTH: 0.15,\n};\n\nexport const RIGGING = {\n  L_SHOULDER_X_OFFSET_FROM_COLLAR_CENTER: -ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.COLLAR_WIDTH / 2.1,\n  R_SHOULDER_X_OFFSET_FROM_COLLAR_CENTER: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.COLLAR_WIDTH / 2.1,\n  // Redesigned: Lowered anchors by zeroing the offset relative to collar top\n  SHOULDER_Y_OFFSET_FROM_COLLAR_END: 0, \n  COLLAR_OFFSET_Y: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.COLLAR * 0.15,\n};\n\nexport const MANNEQUIN_LOCAL_FLOOR_Y = \n    ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_UPPER + \n    ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_LOWER +\n    ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.FOOT +\n    ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.TOE; \n\nexport const CUTOUT_GAP_SIZE = 5; \n\nexport const GROUND_STRIP_COLOR = '#F3F4F6'; \nexport const GROUND_STRIP_HEIGHT_RAW_H_UNIT = 0.05; \n\nexport const TIMING = {\n  DEFAULT_TARGET_FPS: 60,\n  PAUSE_TRANSITION_DURATION: 1000,\n  MODE_TRANSITION_DURATION: 500, \n};\n\nexport const UI = {\n  DEFAULT_ZOOM_INDEX: 4,\n  ZOOM_LEVELS: [0.1, 0.2, 0.35, 0.5, 0.75, 1, 1.25, 1.5, 2.0, 3.0, 4.0],\n  BASE_VIEWBOX: { x: -500, y: -1100, width: 1000, height: 1000 },\n};\n\nexport const IDLE_PHYSICS = {\n  BREATH_SPEED_BASE: 0.00015,\n  BREATH_SPEED_FACTOR: 0.04,\n  TORSO_BREATH_AMPLITUDE: 1.2,\n  COLLAR_BREATH_AMPLITUDE: 0.8,\n  HEAVY_BREATH_TORSO_MULTIPLIER: 2.5,\n  HEAVY_BREATH_COLLAR_MULTIPLIER: 1.5,\n  KNEE_BREATH_AMPLITUDE: 0.2,\n  SWAY_SPEED_BASE: 0.0002,\n  SWAY_SPEED_FACTOR: 0.03,\n  MAX_SPEED_DAMPENING_FACTOR: 0.5,\n};\n\nexport const GROUNDING_PHYSICS = {\n  FLOOR_Y_OFFSET_GLOBAL_H_UNIT: 0,\n  GROUNDING_SPRING_FACTOR: 0.4,\n  GROUNDING_X_STABILITY_FACTOR: 0.1,\n  FOOT_LIFT_THRESHOLD_H_UNIT: 0.02,\n  COG_X_SIDE_OFFSET_H_UNIT: 0.15,\n  STABILITY_SPRING_BASE_SPREAD_H_UNIT: 0.2,\n  STABILITY_SPRING_CROUCH_SPREAD_H_UNIT: 0.45,\n  VERTICALITY_TENSION_THRESHOLD: 0.8,\n  VERTICALITY_STRAIGHTEN_FACTOR: 0.1,\n  GRAVITY_OVERLOAD_KNEE_BEND_THRESHOLD: 120,\n  GRAVITY_OVERLOAD_CENTERING_FACTOR: 0.3,\n};\n"
+            }
+          ]
+        },
+        {
+          "path": "components/Bone.tsx",
+          "generationType": 1,
+          "isDone": false,
+          "description": "Update anchor visuals to \"Red Dots\" and refine paths for Flattened Head and ultra-thin base hands/feet.",
+          "errorWhileGenerating": true
+        }
+      ]
+    },
+    "createdTimestamp": {
+      "seconds": 1770438356,
+      "nanos": 988000000
+    },
+    "doneTimestamp": {
+      "seconds": 1770438363,
+      "nanos": 655000000
+    }
+  },
+  {
+    "id": 251,
+    "author": "model",
+    "payload": {
+      "type": "error",
+      "error": "An internal error occurred.",
+      "metadata": {
+        "message": "Failed to run code assistant. Please try again."
+      },
+      "isCancelError": false,
+      "isLoopingError": false
+    },
+    "createdTimestamp": {
+      "seconds": 1770438371,
+      "nanos": 864000000
+    },
+    "doneTimestamp": {
+      "seconds": 1770438371,
+      "nanos": 864000000
+    }
+  },
+  {
+    "id": 253,
+    "author": "user",
+    "payload": {
+      "type": "text",
+      "text": "There was an unexpected error. Finish what you were doing.",
+      "files": [],
+      "fileUploads": [],
+      "cssBlocks": [],
+      "cMarkNode": {}
+    },
+    "createdTimestamp": {
+      "seconds": 1770438375,
+      "nanos": 808000000
+    }
+  },
+  {
+    "id": 254,
+    "author": "model",
+    "payload": {
+      "type": "thinking",
+      "text": "",
+      "errorWhileThinking": true
+    },
+    "createdTimestamp": {
+      "seconds": 1770438375,
+      "nanos": 808000000
+    },
+    "doneTimestamp": {
+      "seconds": 1770438397,
+      "nanos": 336000000
+    }
+  },
+  {
+    "id": 255,
+    "author": "model",
+    "payload": {
+      "type": "error",
+      "error": "An internal error occurred.",
+      "metadata": {
+        "message": "Failed to run code assistant. Please try again."
+      },
+      "isCancelError": false,
+      "isLoopingError": false
+    },
+    "createdTimestamp": {
+      "seconds": 1770438397,
+      "nanos": 337000000
+    },
+    "doneTimestamp": {
+      "seconds": 1770438397,
+      "nanos": 337000000
+    }
+  },
+  {
+    "id": 257,
+    "author": "user",
+    "payload": {
+      "type": "text",
+      "text": "calibrate personaity always makes the same cycle ",
+      "files": [],
+      "fileUploads": [],
+      "cssBlocks": [],
+      "cMarkNode": {}
+    },
+    "createdTimestamp": {
+      "seconds": 1770438472,
+      "nanos": 506000000
+    }
+  },
+  {
+    "id": 258,
+    "author": "model",
+    "payload": {
+      "type": "thinking",
+      "text": "**Improving Randomization in Tools**\n\nI'm currently focused on the frustrating calibration cycle in personality generation. My goal is to revamp the randomization and mapping within `GaitSynthesizer` and `CharacterGenerator`. The objective is to achieve a broader range of personalities when calibrating, to avoid the current stagnation. This falls under the Bitruvius 0.2 Environmental Roadmap.\n\n\n**Refining Personality Synthesis**\n\nI'm now zeroing in on the \"Calibrate Personality\" loop and how to break the stagnation it produces with identical input. The core issue is the deterministic nature of character generation, specifically using the hash of the input text as a seed, leading to the same result on repeated calibration clicks. I'm introducing an entropy factor, potentially a timestamp or random salt, to inject variability. This should feed into the `GaitSynthesizer`, allowing it to express more personality from the same textual prompt by varying the gaits.\n\n\n**Expanding Genetic Variance**\n\nI'm now integrating more genome data to refine the gait mapping within `GaitSynthesizer`. The `vibeScale` needs to go beyond linear intensity and more effectively morph walks. I'm also adding a random seed or salt to character generation logic in `App.tsx` and `CharacterGenerator.ts` to increase variance, especially when \"re-roll\" is implied. Micro-behaviors are being introduced in `GaitSynthesizer`.\n\n\n**Optimizing Movement Variance**\n\nI'm now implementing strategies to avoid repetitive gaits. I'm focusing on the \"Calibrate\" button's function, especially how character movement feels \"alive.\" I'm updating `CharacterGenerator` to incorporate a time-based or random component to seed generation, preventing identical locomotion loops on repeated clicks. I'm also enhancing `GaitSynthesizer` for more gait blending using genome variance properties and making sure `vibeScale` introduces unique \"personality flavor\" like asymmetry or timing shifts.\n\n\n**Enhancing Locomotion Randomness**\n\nI'm now refining the locomotion cycle, targeting distinct movements with each generation. The focus is on the interplay between `GaitSynthesizer.ts` and `CharacterGenerator.ts` to inject more personality. I'm incorporating variance from genome data within `GaitSynthesizer.synthesizeGait` using `g.stride.variance`. Updates in `CharacterGenerator.generateCharacter` include a random salt for better diversity, and I'm updating `App.tsx` to handle these changes properly. Furthermore, I'm considering a \"per-cycle\" noise factor within `updateLocomotionPhysics` to introduce subtle imperfections. Additionally, I'm adding per-part scaling to `GaitSynthesizer`, and ensuring character descriptions like \"sneaky\" have an actual effect on the character movement. Finally, I'm integrating luminance changes to `Bone.tsx` to ensure tensioned anchor dots appear as high-luminance red, and that `Mannequin.tsx` properly reflects the parenting structure between collar, head, and arms.\n\n\n",
+      "cMarkNode": {}
+    },
+    "createdTimestamp": {
+      "seconds": 1770438472,
+      "nanos": 506000000
+    },
+    "doneTimestamp": {
+      "seconds": 1770438487,
+      "nanos": 227000000
+    }
+  },
+  {
+    "id": 259,
+    "author": "model",
+    "payload": {
+      "type": "text",
+      "text": "To address the issue where \"Calibrate Personality\" produces identical results and ensure the core doll redesign (Red Dot anchors and Olive Collar parenting) is fully implemented, I will update the generation logic to introduce entropy and refine the kinematic parenting.\n\n### Specification: Bitruvius 0.2 Variety & Doll Redesign\n\n1.  **Entropy Integration**:\n    *   Update `CharacterGenerator` to accept a dynamic seed. Every click of \"Calibrate Personality\" will now mix `Date.now()` into the hash, ensuring that even the same text prompt produces unique \"genetic mutations\" of that personality.\n    *   Enhance `GaitSynthesizer` to utilize the `variance` and `responsiveness` fields from the `GaitGenome`. This adds subtle asymmetrical \"imperfections\" to the gait, making it feel less like a perfect loop.\n\n2.  **Doll Redesign (Anatomical Fixes)**:\n    *   **Olive Collar Parenting**: Update `Mannequin.tsx` to strictly treat the Collar as the master transform for the Head and both Arms. \n    *   **Red Dot Anchors**: Update `Bone.tsx` to use a high-luminance Red (#FF2A6D) for anchors. The size and brightness of these dots will now scale dynamically with `tensionFactor` (0.0 to 1.0) to provide visual feedback for joint stress.\n\n3.  **Visual Behavior**:\n    *   **Calibration Variety**: Different \"Sneaky\" characters will now have varying degrees of crouch, frequency, and arm-lag based on the random seed.\n    *   **Anchor Tension**: As a limb reaches its maximum reach (Stretched), the red anchor dot will grow in size and intensity, signaling the \"Elastic Ankle\" constraints are active.\n\n",
+      "cMarkNode": {}
+    },
+    "createdTimestamp": {
+      "seconds": 1770438487,
+      "nanos": 227000000
+    },
+    "doneTimestamp": {
+      "seconds": 1770438487,
+      "nanos": 311000000
+    }
+  },
+  {
+    "id": 260,
+    "author": "model",
+    "payload": {
+      "type": "generationTable",
+      "entries": [
+        {
+          "path": "utils/characterGenerator.ts",
+          "generationType": 1,
+          "isDone": true,
+          "description": "Introduce entropy into the character generation process to ensure unique results per calibration click.",
+          "diffs": [
+            {
+              "target": "",
+              "replacement": "\nimport { CharacterMorphology, TextualCharacterDescription, GaitGenome } from '../types';\n\nexport class CharacterGenerator {\n  private static stringToSeed(str: string, salt: number = 0): number {\n    let hash = 0;\n    const combined = str + salt.toString();\n    for (let i = 0; i < combined.length; i++) {\n      hash = (hash << 5) - hash + combined.charCodeAt(i);\n      hash |= 0; \n    }\n    return Math.abs(hash);\n  }\n\n  private static getSeededRandom(seed: number): () => number {\n    return () => {\n      seed = (seed * 16807) % 2147483647;\n      return (seed - 1) / 2147483646;\n    };\n  }\n\n  static parseDescription(text: string): TextualCharacterDescription {\n    const description: TextualCharacterDescription = {\n      text,\n      extracted: {\n        size: 'medium', weight: 'normal', limbType: 'legs',\n        behavior: [], mood: [], specialAbilities: [], symmetry: 'bilateral',\n      },\n    };\n    const lower = text.toLowerCase();\n    \n    if (/tiny|small|mini|micro|minuscule|little/.test(lower)) description.extracted.size = 'tiny';\n    else if (/large|big|giant|huge|enormous|massive|tall/.test(lower)) description.extracted.size = lower.includes('massive') ? 'massive' : 'large';\n\n    if (/light|nimble|agile|graceful|delicate|thin/.test(lower)) description.extracted.weight = 'light';\n    else if (/heavy|bulky|ponderous|thick|sturdy|strong/.test(lower)) description.extracted.weight = 'heavy';\n    else if (/massive|colossal|leviathan|tank/.test(lower)) description.extracted.weight = 'massive';\n\n    const behaviors = ['creeping', 'prowling', 'stalking', 'sneaking', 'sprinting', 'dashing', 'waddling', 'bounding', 'skittering', 'graceful', 'elegant', 'jerky', 'bouncy', 'energetic', 'sluggish', 'robotic', 'fluid', 'stiff'];\n    behaviors.forEach(b => { if (lower.includes(b)) description.extracted.behavior.push(b); });\n\n    const moods = ['confident', 'proud', 'arrogant', 'nervous', 'anxious', 'timid', 'relaxed', 'calm', 'aggressive', 'playful', 'lazy', 'vigilant', 'heroic', 'clumsy', 'bold', 'scared'];\n    moods.forEach(m => { if (lower.includes(m)) description.extracted.mood.push(m); });\n\n    return description;\n  }\n\n  static generateCharacter(text: string, entropy: number = Date.now()): CharacterMorphology {\n    const parsed = this.parseDescription(text);\n    const seed = this.stringToSeed(text, entropy);\n    const rng = this.getSeededRandom(seed);\n    \n    const id = `char_${Date.now()}_${rng().toString(36).slice(2, 9)}`;\n    const sizeMap = { tiny: 0.3, small: 0.6, medium: 1.0, large: 1.5, massive: 2.0 };\n    const weightMap = { light: 0.3, normal: 0.5, heavy: 0.8, massive: 1.0 };\n    \n    const sizeData = sizeMap[parsed.extracted.size];\n    const weightVal = weightMap[parsed.extracted.weight];\n\n    let stride = 1, frequency = 1, bodyBounce = 0.5, confidence = 0.5, anxiousness = 0, agility = 0.5;\n\n    // Apply seed variance to base parameters\n    stride += (rng() - 0.5) * 0.4;\n    frequency += (rng() - 0.5) * 0.4;\n    confidence += (rng() - 0.5) * 0.5;\n    agility += (rng() - 0.5) * 0.4;\n\n    parsed.extracted.behavior.forEach(b => {\n      if (['creeping', 'sneaking', 'stalking'].includes(b)) { stride *= 0.6; frequency *= 0.5; confidence *= 0.3; anxiousness += 0.4; }\n      if (['sprinting', 'dashing'].includes(b)) { stride *= 1.4; frequency *= 1.5; agility += 0.5; confidence += 0.4; }\n      if (['bounding', 'hopping', 'bouncy'].includes(b)) { stride *= 1.2; frequency *= 1.1; bodyBounce += 0.4; }\n      if (['robotic', 'stiff'].includes(b)) { bodyBounce *= 0.1; agility *= 0.5; frequency *= 0.8; }\n      if (['fluid', 'graceful'].includes(b)) { agility += 0.4; bodyBounce *= 1.2; }\n    });\n\n    parsed.extracted.mood.forEach(m => {\n      if (['confident', 'proud', 'heroic', 'bold'].includes(m)) { confidence = Math.min(1.5, confidence + 0.6); anxiousness = 0; }\n      if (['anxious', 'timid', 'nervous', 'scared'].includes(m)) { anxiousness = Math.min(1.5, anxiousness + 0.6); confidence = Math.max(0, confidence - 0.5); stride *= 0.6; }\n      if (['clumsy'].includes(m)) { agility *= 0.4; bodyBounce += 0.5; stride *= 1.2; }\n      if (['lazy', 'relaxed'].includes(m)) { frequency *= 0.6; confidence = 0.4; }\n    });\n\n    const genome: GaitGenome = {\n      stride: { base: stride, speed: 0.1, variance: rng() * 0.2, responsiveness: 0.8 },\n      frequency: { base: frequency, speed: 0.15, variance: rng() * 0.2, responsiveness: 0.9 },\n      amplitude: { base: 0.6, speed: 0.1, variance: 0.05, responsiveness: 0.7 },\n      phaseLags: [0, Math.PI],\n      footFall: 'diagonal',\n      bodyRoll: { base: 0.3 * (1 - weightVal), speed: 0.1, variance: rng() * 0.1, responsiveness: 0.7 },\n      bodyPitch: { base: 0.2, speed: 0.12, variance: 0.05, responsiveness: 0.8 },\n      bodyBounce: { base: bodyBounce, speed: 0.2, variance: rng() * 0.3, responsiveness: 0.9 },\n      ankleFlexion: { base: 0.6, speed: 0.15, variance: 0.1, responsiveness: 0.85 },\n      kneeFlexion: { base: 0.5, speed: 0.12, variance: 0.06, responsiveness: 0.8 },\n      hipSwing: { base: 0.4 * stride, speed: 0.1, variance: 0.05, responsiveness: 0.75 },\n      shoulderSwing: { base: 0.3 * (1 - weightVal * 0.5), speed: 0.1, variance: 0.05, responsiveness: 0.7 },\n      energyCost: weightVal, stability: 1 - weightVal * 0.4, agility, weight: weightVal,\n      idleMovement: 0.3 + anxiousness * 0.2, anxiousness, confidence,\n    };\n\n    return {\n      id, name: this.generateName(parsed.extracted),\n      type: 'biped', anatomy: { limbCount: 2, limbPairs: [], centerOfMass: 0.5, bodyLength: sizeData, limbLength: sizeData * 0.6, symmetry: 'bilateral' },\n      gaitDNA: genome, constraints: { maxSpeed: 200, minSpeed: 20, maxTurnRate: 1, legStepHeight: 30, footClearance: 10, strikeType: 'midfoot' },\n      description: text, tags: [...parsed.extracted.behavior, ...parsed.extracted.mood], generatedFrom: text,\n    };\n  }\n\n  private static generateName(e: any): string {\n    const s = { tiny: 'Tiny', small: 'Small', medium: '', large: 'Large', massive: 'Massive' };\n    const w = { light: 'Swift', normal: '', heavy: 'Ponderous', massive: 'Colossal' };\n    const prefix = s[e.size as keyof typeof s] || '';\n    const weightPrefix = w[e.weight as keyof typeof w] || '';\n    return `${prefix} ${weightPrefix} Walker`.trim() || \"Bitruvian Subject\";\n  }\n}\n"
+            }
+          ]
+        },
+        {
+          "path": "utils/gaitSynthesis.ts",
+          "generationType": 1,
+          "isDone": true,
+          "description": "Enhance synthesis to use genome variance and ensure more diverse archetypal movement.",
+          "diffs": [
+            {
+              "target": "",
+              "replacement": "\nimport { CharacterMorphology, GaitGenome, GaitParameter } from '../types';\nimport { WalkingEngineGait } from '../types';\nimport { lerp } from './kinematics';\n\nexport class GaitSynthesizer {\n  static synthesizeGait(morphology: CharacterMorphology, vibeScale: number = 1.0): WalkingEngineGait {\n    const g = morphology.gaitDNA;\n    const anat = morphology.anatomy;\n    const tags = morphology.tags || [];\n\n    const isQueen = tags.some(t => ['queen', 'regal', 'formal', 'stiff', 'elegant'].includes(t.toLowerCase()));\n    const isAthlete = tags.some(t => ['athlete', 'runner', 'bold', 'heroic', 'energetic'].includes(t.toLowerCase()));\n    const isVillain = tags.some(t => ['villain', 'sneaky', 'aggressive', 'creeping', 'dark'].includes(t.toLowerCase()));\n\n    // Mix in genome variance based on vibeScale\n    const scale = (val: number, neutral: number = 1.0, variance: number = 0) => {\n        const personalityValue = lerp(neutral, val, vibeScale);\n        return personalityValue + (Math.random() - 0.5) * variance * vibeScale;\n    };\n\n    const gait: WalkingEngineGait = {\n      intensity: scale(this.calculateIntensity(g), 1.0, g.stride.variance),\n      frequency: scale(this.calculateFrequency(g, anat), 1.0, g.frequency.variance),\n      stride: scale(this.calculateStride(g, anat), 1.0, g.stride.variance),\n      lean: scale(this.calculateLean(g, anat), 0, g.bodyPitch.variance),\n      upper_body_lean: scale(this.calculateUpperBodyLean(g, anat), 0, g.bodyPitch.variance),\n      hip_sway: scale(this.calculateHipSway(g), 0.4, g.bodyRoll.variance),\n      waist_twist: scale(this.calculateWaistTwist(g), 0.3, g.bodyRoll.variance),\n      arm_swing: scale(this.calculateArmSwing(g), 0.6, g.shoulderSwing.variance),\n      elbow_bend: scale(this.calculateElbowBend(g), 0.7, 0.1),\n      arm_spread: scale(this.calculateArmSpread(g), 0.1, 0.05),\n      gravity: scale(this.calculateGravity(g), 0.3, 0.1),\n      verticality: scale(this.calculateVerticality(g), 0.5, g.bodyBounce.variance),\n      kick_up_force: scale(this.calculateKickUpForce(g), 0.4, 0.1),\n      hover_height: scale(this.calculateHoverHeight(g), 0.1, 0.05),\n      foot_roll: scale(this.calculateFootRoll(g, morphology.constraints), 0.6, 0.1),\n      toe_bend: scale(this.calculateToeBend(g), 0.8, 0.1),\n      footDrag: scale(this.calculateFootDrag(g), 0.5, 0.1),\n      footSpring: scale(this.calculateFootSpring(g), 0.5, 0.1),\n      torso_swivel: scale(this.calculateTorsoSwivel(g), 0.3, 0.1),\n      head_spin: scale(this.calculateHeadSpin(g), 0, 0.2),\n      handsAutoBend: scale(this.calculateLimbAutoBend(g, 'hands'), 0.3, 0.1),\n      handsAutoStretch: scale(this.calculateLimbAutoStretch(g, 'hands'), 0.3, 0.1),\n      feetAutoBend: scale(this.calculateLimbAutoBend(g, 'feet'), 0.4, 0.1),\n      feetAutoStretch: scale(this.calculateLimbAutoStretch(g, 'feet'), 0.4, 0.1),\n      headAutoBend: 0.1,\n      headAutoStretch: 0.05,\n      heavyStomp: scale(this.calculateStomp(g), 0, 0.1),\n      headVelocitySensitivity: scale(this.calculateHeadSensitivity(g), 0.2, 0.1),\n      elbowFlexibility: scale(this.calculateFlexibility(g), 0.5, 0.1),\n      elbowMinBend: scale(this.calculateMinBend(g), -5, 5),\n      elbowMaxBend: scale(this.calculateMaxBend(g), 150, 10),\n    };\n\n    if (isQueen) {\n        gait.verticality = lerp(gait.verticality, 0.95, vibeScale);\n        gait.waist_twist *= (1 - vibeScale * 0.8);\n        gait.hip_sway *= (1 - vibeScale * 0.7);\n        gait.arm_swing *= (1 - vibeScale * 0.9);\n        gait.lean = lerp(gait.lean, -0.2, vibeScale);\n    }\n    if (isAthlete) {\n        gait.frequency *= (1 + vibeScale * 0.5);\n        gait.stride *= (1 + vibeScale * 0.4);\n        gait.kick_up_force = lerp(gait.kick_up_force, 0.85, vibeScale);\n        gait.arm_swing = lerp(gait.arm_swing, 1.8, vibeScale);\n    }\n    if (isVillain) {\n        gait.gravity = lerp(gait.gravity, 0.85, vibeScale);\n        gait.lean = lerp(gait.lean, 0.6, vibeScale);\n        gait.footDrag = lerp(gait.footDrag, 0.8, vibeScale);\n        gait.headVelocitySensitivity = lerp(gait.headVelocitySensitivity, 0.9, vibeScale);\n    }\n\n    return gait;\n  }\n\n  private static calculateIntensity(g: GaitGenome): number {\n    return Math.min(2, g.stride.base * (1 + g.frequency.base * 0.5) * (1 - g.energyCost * 0.3));\n  }\n  private static calculateFrequency(g: GaitGenome, anat: any): number {\n    return g.frequency.base * (1 + (anat.limbCount - 2) * 0.1) * (2 - g.weight);\n  }\n  private static calculateStride(g: GaitGenome, anat: any): number {\n    return g.stride.base * (1 + anat.limbLength * 0.2) * (1 - g.energyCost * 0.2);\n  }\n  private static calculateLean(g: GaitGenome, anat: any): number {\n    return g.bodyPitch.base * (anat.centerOfMass - 0.5) * 2.5;\n  }\n  private static calculateUpperBodyLean(g: GaitGenome, anat: any): number {\n    return g.bodyPitch.base * 0.7 * (anat.centerOfMass > 0.6 ? 1.2 : -0.6);\n  }\n  private static calculateHipSway(g: GaitGenome): number {\n    return g.bodyRoll.base * (1.2 + g.stride.base);\n  }\n  private static calculateWaistTwist(g: GaitGenome): number {\n    return g.bodyRoll.base * 1.0 * (1 - g.stability * 0.5);\n  }\n  private static calculateArmSwing(g: GaitGenome): number {\n    return Math.min(2, g.shoulderSwing.base * (1 + g.stride.base * 0.4) * (1 - g.weight * 0.4));\n  }\n  private static calculateElbowBend(g: GaitGenome): number {\n    return g.shoulderSwing.base * (1.2 + g.confidence * 0.3);\n  }\n  private static calculateArmSpread(g: GaitGenome): number {\n    return g.shoulderSwing.base * g.agility * 0.6 * (1 - g.weight);\n  }\n  private static calculateGravity(g: GaitGenome): number {\n    return Math.min(1, 0.25 + g.weight * 0.45 + g.bodyBounce.base * 0.3);\n  }\n  private static calculateVerticality(g: GaitGenome): number {\n    return 0.5 + g.bodyBounce.base * 0.4 - g.weight * 0.25;\n  }\n  private static calculateKickUpForce(g: GaitGenome): number {\n    return g.bodyBounce.base * (1.2 - g.weight * 0.6) * g.agility;\n  }\n  private static calculateHoverHeight(g: GaitGenome): number {\n    return g.bodyBounce.base * (1 - g.weight) * 0.7;\n  }\n  private static calculateFootRoll(g: GaitGenome, constraints: any): number {\n    return g.ankleFlexion.base * (constraints.strikeType === 'heel' ? 0.9 : 0.5);\n  }\n  private static calculateToeBend(g: GaitGenome): number {\n    return g.ankleFlexion.base * (1.2 + g.stride.base * 0.2);\n  }\n  private static calculateFootDrag(g: GaitGenome): number {\n    return 1.1 - g.agility * 0.4;\n  }\n  private static calculateFootSpring(g: GaitGenome): number {\n    return g.bodyBounce.base * (1.1 - g.weight * 0.5);\n  }\n  private static calculateTorsoSwivel(g: GaitGenome): number {\n    return g.bodyRoll.base * g.agility * 0.6;\n  }\n  private static calculateHeadSpin(g: GaitGenome): number {\n    return g.confidence * 0.4 * (1 - g.anxiousness * 0.6);\n  }\n  private static calculateStomp(g: GaitGenome): number {\n    return Math.min(1, g.weight * 0.6 * (1 - g.agility * 0.8));\n  }\n  private static calculateHeadSensitivity(g: GaitGenome): number {\n    return 0.5 * (1 + g.anxiousness * 0.4);\n  }\n  private static calculateFlexibility(g: GaitGenome): number {\n    return g.agility * (1.2 - g.weight * 0.4);\n  }\n  private static calculateMinBend(g: GaitGenome): number {\n    return -5 - g.agility * 25;\n  }\n  private static calculateMaxBend(g: GaitGenome): number {\n    return 155 - g.weight * 35;\n  }\n  private static calculateLimbAutoBend(g: GaitGenome, limbType: string): number {\n    return limbType === 'hands' ? g.shoulderSwing.base * 0.4 : g.ankleFlexion.base * 0.5;\n  }\n  private static calculateLimbAutoStretch(g: GaitGenome, limbType: string): number {\n    return limbType === 'hands' ? g.shoulderSwing.base * 0.2 : g.ankleFlexion.base * 0.25;\n  }\n}\n"
+            }
+          ]
+        },
+        {
+          "path": "components/Mannequin.tsx",
+          "generationType": 1,
+          "isDone": true,
+          "description": "Refine parenting structure: Olive Collar is now explicitly the parent of Head and Arms.",
+          "diffs": [
+            {
+              "target": "",
+              "replacement": "\nimport React, { useMemo, useCallback } from 'react';\nimport { Bone } from './Bone';\nimport { ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT, RIGGING, CUTOUT_GAP_SIZE } from '../constants'; \nimport { WalkingEnginePose, WalkingEngineProportions, WalkingEnginePivotOffsets, Vector2D, JointModesState, LotteSettings, PartName } from '../types';\n\ninterface MannequinProps {\n  pose: WalkingEnginePose;\n  bodyRotation: number;\n  pivotOffsets: Record<string, number>;\n  props: WalkingEngineProportions;\n  showPivots: boolean;\n  baseUnitH: number;\n  onAnchorMouseDown: (boneKey: keyof WalkingEnginePivotOffsets, clientX: number) => void;\n  draggingBoneKey: keyof WalkingEnginePivotOffsets | null;\n  isPaused: boolean;\n  activePins: string[];\n  tensions: Record<string, number>;\n  jointModes: JointModesState;\n  lotteSettings: LotteSettings;\n  ghosts?: { phase: number; color: string; opacity: number }[];\n  ghostDataGenerator?: (phase: number) => Partial<WalkingEnginePose>;\n}\n\nconst RENDER_ORDER: (keyof WalkingEngineProportions)[] = [\n    'waist', 'torso', 'l_upper_leg', 'r_upper_leg', 'l_lower_leg', 'r_lower_leg', 'l_foot', 'r_foot', 'l_toe', 'r_toe', \n    'collar', 'l_upper_arm', 'r_upper_arm', 'head', 'l_lower_arm', 'r_lower_arm', 'l_hand', 'r_hand'\n];\n\nconst partDefinitions: Record<keyof WalkingEngineProportions, any> = {\n    head: { rawH: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.HEAD, rawW: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.HEAD_WIDTH, variant: 'head-tall-oval', drawsUpwards: true, label: 'Head', boneKey: 'neck' },\n    collar: { rawH: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.COLLAR, rawW: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.COLLAR_WIDTH, variant: 'collar-horizontal-oval-shape', drawsUpwards: true, label: 'Collar', boneKey: 'collar' },\n    torso: { rawH: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.TORSO, rawW: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.TORSO_WIDTH, variant: 'torso-teardrop-pointy-down', drawsUpwards: true, label: 'Torso', boneKey: 'torso' },\n    waist: { rawH: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.WAIST, rawW: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.WAIST_WIDTH, variant: 'waist-teardrop-pointy-up', drawsUpwards: true, label: 'Waist', boneKey: 'waist' },\n    r_upper_arm: { rawH: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.UPPER_ARM, rawW: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LIMB_WIDTH_ARM, variant: 'deltoid-shape', label: 'R.Bicep', boneKey: PartName.RShoulder },\n    r_lower_arm: { rawH: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LOWER_ARM, rawW: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LIMB_WIDTH_FOREARM, variant: 'limb-tapered', label: 'R.Forearm', boneKey: PartName.RElbow },\n    r_hand: { rawH: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.HAND, rawW: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.HAND_WIDTH, variant: 'hand-foot-arrowhead-shape', label: 'R.Hand', boneKey: PartName.RWrist },\n    l_upper_arm: { rawH: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.UPPER_ARM, rawW: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LIMB_WIDTH_ARM, variant: 'deltoid-shape', label: 'L.Bicep', boneKey: PartName.LShoulder },\n    l_lower_arm: { rawH: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LOWER_ARM, rawW: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LIMB_WIDTH_FOREARM, variant: 'limb-tapered', label: 'L.Forearm', boneKey: PartName.LElbow },\n    l_hand: { rawH: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.HAND, rawW: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.HAND_WIDTH, variant: 'hand-foot-arrowhead-shape', label: 'L.Hand', boneKey: PartName.LWrist },\n    r_upper_leg: { rawH: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_UPPER, rawW: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LIMB_WIDTH_THIGH, variant: 'limb-tapered', label: 'R.Thigh', boneKey: PartName.RThigh },\n    r_lower_leg: { rawH: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_LOWER, rawW: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LIMB_WIDTH_CALF, variant: 'limb-tapered', label: 'R.Calf', boneKey: PartName.RKnee },\n    r_foot: { rawH: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.FOOT, rawW: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.FOOT_WIDTH, variant: 'hand-foot-arrowhead-shape', label: 'R.Foot', boneKey: PartName.RAnkle },\n    r_toe: { rawH: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.TOE, rawW: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.TOE_WIDTH, variant: 'toe-triangle', label: 'R.Toe', boneKey: PartName.RToe },\n    l_upper_leg: { rawH: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_UPPER, rawW: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LIMB_WIDTH_THIGH, variant: 'limb-tapered', label: 'L.Thigh', boneKey: PartName.LThigh },\n    l_lower_leg: { rawH: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_LOWER, rawW: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LIMB_WIDTH_CALF, variant: 'limb-tapered', label: 'L.Calf', boneKey: PartName.LKnee },\n    l_foot: { rawH: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.FOOT, rawW: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.FOOT_WIDTH, variant: 'hand-foot-arrowhead-shape', label: 'L.Foot', boneKey: PartName.LAnkle },\n    l_toe: { rawH: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.TOE, rawW: ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.TOE_WIDTH, variant: 'toe-triangle', label: 'L.Toe', boneKey: PartName.LToe },\n};\n\nconst rotateVec = (vec: Vector2D, angleDeg: number): Vector2D => {\n  const r = angleDeg * Math.PI / 180;\n  const c = Math.cos(r);\n  const s = Math.sin(r);\n  return { x: vec.x * c - vec.y * s, y: vec.x * s + vec.y * c };\n};\nconst addVec = (v1: Vector2D, v2: Vector2D): Vector2D => ({ x: v1.x + v2.x, y: v1.y + v2.y });\n\nexport const Mannequin: React.FC<MannequinProps> = ({\n  pose, bodyRotation, pivotOffsets, props, showPivots, baseUnitH,\n  onAnchorMouseDown, draggingBoneKey, isPaused,\n  activePins, tensions, jointModes, lotteSettings, ghosts, ghostDataGenerator\n}) => {\n    const getScaledDimension = useCallback((rawAnatomyValue: number, propKey: keyof WalkingEngineProportions, axis: 'w' | 'h') => {\n        const propScale = props[propKey]?.[axis] || 1;\n        return rawAnatomyValue * baseUnitH * propScale;\n    }, [props, baseUnitH]);\n\n    const calculateTransforms = useCallback((currentPose: WalkingEnginePose) => {\n        const transforms: Partial<Record<keyof WalkingEngineProportions, { position: Vector2D; rotation: number }>> = {};\n        const isCutoutMode = lotteSettings.enabled && lotteSettings.cutoutSnap;\n\n        const getRotation = (partKey: string) => {\n            const partRotation = (currentPose as any)[partKey] || 0;\n            const offset = (pivotOffsets as any)[partKey] || 0; \n            return partRotation + offset;\n        };\n\n        const getDrawLength = (rawAnatomyValue: number, propKey: keyof WalkingEngineProportions, axis: 'h'): number => {\n            const fullLength = getScaledDimension(rawAnatomyValue, propKey, axis);\n            return isCutoutMode ? Math.max(0, fullLength - CUTOUT_GAP_SIZE * 2) : fullLength;\n        };\n\n        const getChildPivotPosition = (parentGlobalPos: Vector2D, parentDrawLength: number, parentGlobalRot: number, drawsParentUpwards: boolean): Vector2D => {\n            const yOffset = drawsParentUpwards \n                ? -(parentDrawLength + (isCutoutMode ? CUTOUT_GAP_SIZE * 2 : 0)) \n                : (parentDrawLength + (isCutoutMode ? CUTOUT_GAP_SIZE * 2 : 0));\n            return addVec(parentGlobalPos, rotateVec({ x: 0, y: yOffset }, parentGlobalRot));\n        };\n\n        // WAIST (Root)\n        const waistDrawLen = getDrawLength(ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.WAIST, 'waist', 'h');\n        const waistRot = getRotation(PartName.Waist) + bodyRotation;\n        transforms.waist = { position: { x: 0, y: 0 }, rotation: waistRot };\n\n        // TORSO\n        const torsoDrawLen = getDrawLength(ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.TORSO, 'torso', 'h');\n        const torsoPos = getChildPivotPosition(transforms.waist.position, waistDrawLen, waistRot, true);\n        const torsoRot = waistRot + getRotation(PartName.Torso);\n        transforms.torso = { position: torsoPos, rotation: torsoRot };\n\n        // COLLAR (Master Parent for Head/Arms - Redesign Phase 0.2)\n        const collarDrawLen = getDrawLength(ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.COLLAR, 'collar', 'h');\n        const collarStartPos = getChildPivotPosition(torsoPos, torsoDrawLen, torsoRot, true);\n        const collarRot = torsoRot + getRotation(PartName.Collar);\n        transforms.collar = { position: collarStartPos, rotation: collarRot };\n        \n        // HEAD (Child of Collar)\n        const headPos = getChildPivotPosition(collarStartPos, collarDrawLen, collarRot, true);\n        const headRot = collarRot + getRotation('neck');\n        transforms.head = { position: headPos, rotation: headRot };\n\n        // ARMS (Children of Collar - Low Anchors)\n        const armAnchorsY = RIGGING.SHOULDER_Y_OFFSET_FROM_COLLAR_END * baseUnitH;\n        \n        const rShoulderOffset = {x: RIGGING.R_SHOULDER_X_OFFSET_FROM_COLLAR_CENTER * baseUnitH, y: armAnchorsY};\n        const rShoulderStartPos = addVec(collarStartPos, rotateVec({x: rShoulderOffset.x, y: -collarDrawLen + rShoulderOffset.y}, collarRot)); \n        const rShoulderRot = collarRot + getRotation(PartName.RShoulder);\n        transforms.r_upper_arm = { position: rShoulderStartPos, rotation: rShoulderRot };\n\n        const rUpperArmLen = getDrawLength(ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.UPPER_ARM, 'r_upper_arm', 'h'); \n        const rElbowPos = getChildPivotPosition(rShoulderStartPos, rUpperArmLen, rShoulderRot, false);\n        const rElbowRot = rShoulderRot + getRotation(PartName.RElbow);\n        transforms.r_lower_arm = {position: rElbowPos, rotation: rElbowRot};\n\n        const rLowerArmLen = getDrawLength(ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LOWER_ARM, 'r_lower_arm', 'h'); \n        const rHandPos = getChildPivotPosition(rElbowPos, rLowerArmLen, rElbowRot, false);\n        const rHandRot = rElbowRot + getRotation(PartName.RWrist);\n        transforms.r_hand = {position: rHandPos, rotation: rHandRot};\n\n        const lShoulderOffset = {x: RIGGING.L_SHOULDER_X_OFFSET_FROM_COLLAR_CENTER * baseUnitH, y: armAnchorsY};\n        const lShoulderStartPos = addVec(collarStartPos, rotateVec({x: lShoulderOffset.x, y: -collarDrawLen + lShoulderOffset.y}, collarRot)); \n        const lShoulderRot = collarRot + getRotation(PartName.LShoulder);\n        transforms.l_upper_arm = { position: lShoulderStartPos, rotation: lShoulderRot };\n\n        const lUpperArmLen = getDrawLength(ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.UPPER_ARM, 'l_upper_arm', 'h'); \n        const lElbowPos = getChildPivotPosition(lShoulderStartPos, lUpperArmLen, lShoulderRot, false);\n        const lElbowRot = lShoulderRot + getRotation(PartName.LElbow);\n        transforms.l_lower_arm = {position: lElbowPos, rotation: lElbowRot};\n\n        const lLowerArmLen = getDrawLength(ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LOWER_ARM, 'l_lower_arm', 'h'); \n        const lHandPos = getChildPivotPosition(lElbowPos, lLowerArmLen, lElbowRot, false);\n        const lHandRot = lElbowRot + getRotation(PartName.LWrist);\n        transforms.l_hand = {position: lHandPos, rotation: lHandRot};\n\n        // LEGS (FK)\n        const legsPos = { x: 0, y: 0 };\n        const rThighRot = bodyRotation + getRotation(PartName.RThigh);\n        transforms.r_upper_leg = {position: legsPos, rotation: rThighRot};\n        const rThighLen = getDrawLength(ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_UPPER, 'r_upper_leg', 'h'); \n        const rKneePos = getChildPivotPosition(legsPos, rThighLen, rThighRot, false);\n        const rKneeRot = rThighRot + getRotation(PartName.RKnee);\n        transforms.r_lower_leg = {position: rKneePos, rotation: rKneeRot};\n        const rLowerLegLen = getDrawLength(ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_LOWER, 'r_lower_leg', 'h'); \n        const rFootPos = getChildPivotPosition(rKneePos, rLowerLegLen, rKneeRot, false);\n        const rFootRot = rKneeRot + getRotation(PartName.RAnkle);\n        transforms.r_foot = {position: rFootPos, rotation: rFootRot};\n        const rFootLen = getDrawLength(ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.FOOT, 'r_foot', 'h'); \n        const rToePos = getChildPivotPosition(rFootPos, rFootLen, rFootRot, false);\n        transforms.r_toe = {position: rToePos, rotation: rFootRot + getRotation(PartName.RToe)};\n\n        const lThighRot = bodyRotation + getRotation(PartName.LThigh);\n        transforms.l_upper_leg = {position: legsPos, rotation: lThighRot};\n        const lThighLen = getDrawLength(ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_UPPER, 'l_upper_leg', 'h'); \n        const lKneePos = getChildPivotPosition(legsPos, lThighLen, lThighRot, false);\n        const lKneeRot = lThighRot + getRotation(PartName.LKnee);\n        transforms.l_lower_leg = {position: lKneePos, rotation: lKneeRot};\n        const lLowerLegLen = getDrawLength(ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_LOWER, 'l_lower_leg', 'h'); \n        const lFootPos = getChildPivotPosition(lKneePos, lLowerLegLen, lKneeRot, false);\n        const lFootRot = lKneeRot + getRotation(PartName.LAnkle);\n        transforms.l_foot = {position: lFootPos, rotation: lFootRot};\n        const lFootLen = getDrawLength(ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.FOOT, 'l_foot', 'h'); \n        const lToePos = getChildPivotPosition(lFootPos, lFootLen, lFootRot, false);\n        transforms.l_toe = {position: lToePos, rotation: lFootRot + getRotation(PartName.LToe)};\n\n        return transforms;\n    }, [bodyRotation, pivotOffsets, baseUnitH, lotteSettings.enabled, lotteSettings.cutoutSnap, getScaledDimension]);\n\n    const activeTransforms = useMemo(() => calculateTransforms(pose), [calculateTransforms, pose]);\n\n    return (\n        <g>\n            {RENDER_ORDER.map(partKey => {\n                const partProps = partDefinitions[partKey];\n                const target = activeTransforms[partKey];\n                if (!target) return null;\n                const boneKey = partProps.boneKey as keyof WalkingEnginePivotOffsets;\n                const isPinned = activePins.includes(boneKey);\n                const currentTension = tensions[boneKey] || 0;\n                const boneLength = getScaledDimension(partProps.rawH, partKey, 'h');\n                const boneWidth = getScaledDimension(partProps.rawW, partKey, 'w');\n\n                return (\n                    <g key={String(partKey)} transform={`translate(${target.position.x}, ${target.position.y}) rotate(${target.rotation})`}>\n                        <Bone \n                            rotation={0} length={boneLength} width={boneWidth} variant={partProps.variant}\n                            drawsUpwards={partProps.drawsUpwards} boneKey={boneKey} proportionKey={partKey}\n                            visible={true} colorClass={partKey === 'collar' ? 'fill-olive' : 'fill-black'}\n                            showPivots={showPivots} onAnchorMouseDown={onAnchorMouseDown}\n                            isBeingDragged={draggingBoneKey === partProps.boneKey}\n                            isPausedAndPivotsVisible={showPivots} isPinned={isPinned} tension={currentTension}\n                        />\n                    </g>\n                );\n            })}\n        </g>\n    );\n};\n"
+            }
+          ]
+        },
+        {
+          "path": "App.tsx",
+          "generationType": 1,
+          "isDone": true,
+          "description": "Update generateCharacter call to include entropy and ensure varied results.",
+          "diffs": [
+            {
+              "target": "",
+              "replacement": "\nimport React, { useState, useEffect, useRef, useCallback } from 'react';\nimport { \n  WalkingEnginePose, WalkingEngineGait, WalkingEnginePivotOffsets, WalkingEngineProportions, \n  JointModesState, IdleSettings, PartName, GaitPresetTemplate, IdlePresetTemplate, \n  LotteSettings, PhysicsControls, Vector2D, GhostState, AnimationClip, AnimationState, Keyframe,\n  CharacterMorphology, MicroScriptInstance\n} from './types';\nimport { ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT, MANNEQUIN_LOCAL_FLOOR_Y, TIMING, UI } from './constants';\nimport { Mannequin } from './components/Mannequin';\nimport { SystemLogger } from './components/SystemLogger';\nimport { LocomotionState, INITIAL_LOCOMOTION_STATE, updateLocomotionPhysics } from './utils/locomotionEngine';\nimport { updateIdlePhysics } from './utils/idleEngine';\nimport { applyFootGrounding } from './utils/groundingEngine';\nimport { lerp, easeInOutQuint, clamp } from './utils/kinematics';\nimport { GaitSynthesizer } from './utils/gaitSynthesis';\nimport { CharacterGenerator } from './utils/characterGenerator';\nimport { CharacterLibraryManager } from './utils/characterLibrary';\nimport { processActiveScripts, getScriptsForTrait, MICRO_SCRIPTS } from './utils/microScripts';\nimport { BehaviorEngine } from './utils/behaviorEngine';\n\nconst gaitSliderConfig: Partial<Record<keyof WalkingEngineGait, { min: number; max: number; step: number; label: string; category: string }>> = {\n  intensity: { min: 0, max: 2, step: 0.01, label: 'Kinetic Intensity', category: 'Primary' },\n  frequency: { min: 0.1, max: 3, step: 0.01, label: 'Cycle Frequency', category: 'Primary' },\n  stride: { min: 0, max: 2, step: 0.01, label: 'Stride Length', category: 'Primary' },\n  lean: { min: -1.5, max: 1.5, step: 0.01, label: 'Pelvic Lean', category: 'Body' },\n  upper_body_lean: { min: -1, max: 1, step: 0.01, label: 'Thoracic Pitch', category: 'Body' },\n  hip_sway: { min: 0, max: 2.5, step: 0.01, label: 'Lateral Sway', category: 'Body' },\n  waist_twist: { min: 0, max: 3.5, step: 0.01, label: 'Torque Rotation', category: 'Body' },\n  torso_swivel: { min: 0, max: 1.5, step: 0.01, label: 'Counter Rotation', category: 'Body' },\n  arm_swing: { min: 0, max: 2.5, step: 0.01, label: 'Swing Amplitude', category: 'Arms' },\n  arm_spread: { min: 0, max: 2.0, step: 0.01, label: 'Scapular Abduction', category: 'Arms' },\n  elbow_bend: { min: 0, max: 2.0, step: 0.01, label: 'Bicep Flexion', category: 'Arms' },\n  elbowFlexibility: { min: 0, max: 1, step: 0.01, label: 'Tendon Elasticity', category: 'Arms' },\n  gravity: { min: 0, max: 1, step: 0.01, label: 'Center of Mass', category: 'Legs' },\n  verticality: { min: 0, max: 1, step: 0.01, label: 'Step Magnitude', category: 'Legs' },\n  kick_up_force: { min: 0, max: 1, step: 0.01, label: 'Posterior Extension', category: 'Legs' },\n  foot_roll: { min: 0, max: 1, step: 0.01, label: 'Ankle Articulation', category: 'Legs' },\n  heavyStomp: { min: 0, max: 1, step: 0.01, label: 'Impact Density', category: 'Effects' },\n  footDrag: { min: 0, max: 1, step: 0.01, label: 'Frictional Drag', category: 'Effects' },\n};\n\nconst DEFAULT_RESTING_POSE: WalkingEnginePose = { \n  bodyRotation: 0, waist: 0, neck: 0, collar: 0, torso: 0, \n  l_shoulder: 15, r_shoulder: -15, \n  l_elbow: -10, r_elbow: -10, \n  l_hand: 0, r_hand: 0, \n  l_hip: 0, r_hip: 0, \n  l_knee: 10, r_knee: 10, \n  l_foot: -90, r_foot: -90, l_toe: 0, r_toe: 0, stride_phase: 0, y_offset: 0, x_offset: 0 \n};\n\nconst DEFAULT_IDLE_SETTINGS: IdleSettings = { \n  breathing: 0.4, weightShift: 0.2, gazeSway: 0.3, tension: 0.1, fidgetFrequency: 0.2, \n  transitionSpeed: 0.3, posture: 0.0, idlePinnedFeet: 'none' \n};\n\nconst DEFAULT_PIVOT_OFFSETS: WalkingEnginePivotOffsets = { \n  neck: 0, collar: 0, torso: 0, waist: 0, \n  l_shoulder: 0, r_shoulder: 0, l_elbow: 0, r_elbow: 0, l_hand: 0, r_hand: 0, \n  l_hip: 0, r_hip: 0, l_knee: 0, r_knee: 0, l_foot: 0, r_foot: 0, l_toe: 0, r_toe: 0 \n};\n\nconst DEFAULT_PROPORTIONS: WalkingEngineProportions = { \n  head: { w: 1, h: 1 }, collar: { w: 1, h: 1 }, torso: { w: 1, h: 1 }, waist: { w: 1, h: 1 }, \n  l_upper_arm: { w: 1, h: 1 }, l_lower_arm: { w: 1, h: 1 }, l_hand: { w: 1, h: 1 }, \n  r_upper_arm: { w: 1, h: 1 }, r_lower_arm: { w: 1, h: 1 }, r_hand: { w: 1, h: 1 }, \n  l_upper_leg: { w: 1, h: 1 }, l_lower_leg: { w: 1, h: 1 }, l_foot: { w: 1, h: 1 }, l_toe: { w: 1, h: 1 }, \n  r_upper_leg: { w: 1, h: 1 }, r_lower_leg: { w: 1, h: 1 }, r_foot: { w: 1, h: 1 }, r_toe: { w: 1, h: 1 } \n};\n\nconst DEFAULT_PHYSICS: PhysicsControls = { \n  motionSmoothing: 0.85, jointElasticity: 0.8, stabilization: 0.75, \n  impactDamping: 0.2, bodyMass: 0.5, pendulumDrag: 0.3, bounceIntensity: 0.5 \n};\n\nconst DEFAULT_LOTTE_SETTINGS: LotteSettings = { \n  enabled: false, frameStepping: true, cutoutSnap: true, \n  paperJitter: true, shadowBlur: false, profileLock: false \n};\n\nconst CollapsibleSection: React.FC<{ title: string; children: React.ReactNode; defaultOpen?: boolean; count?: number }> = ({ title, children, defaultOpen = true, count }) => {\n  const [isOpen, setIsOpen] = useState(defaultOpen);\n  return (\n    <div className=\"flex flex-col mb-1 border-b border-ridge/20\">\n      <button \n        onClick={() => setIsOpen(!isOpen)} \n        className=\"flex justify-between items-center w-full py-2.5 px-1 text-[9px] font-black tracking-widest uppercase hover:bg-mono-darker/50 transition-colors\"\n      >\n        <span className=\"flex items-center gap-2\">\n            <span className={isOpen ? 'text-selection' : 'text-mono-light'}>{isOpen ? '▼' : '▶'}</span>\n            {title}\n        </span>\n        {count !== undefined && <span className=\"text-[7px] bg-mono-dark px-1.5 py-0.5 rounded border border-ridge text-mono-light\">{count}</span>}\n      </button>\n      {isOpen && <div className=\"p-2 pt-0 flex flex-col gap-3\">{children}</div>}\n    </div>\n  );\n};\n\nconst App: React.FC = () => {\n  const [library] = useState(() => new CharacterLibraryManager());\n  const [characters, setCharacters] = useState<CharacterMorphology[]>([]);\n  const [currentCharacter, setCurrentCharacter] = useState<CharacterMorphology | null>(null);\n  const [charDescription, setCharDescription] = useState('');\n  const [vibeScale, setVibeScale] = useState(1.0);\n\n  const [showPivots, setShowPivots] = useState(true);\n  const [isPaused, setIsPaused] = useState(false);\n  const [isIkEnabled, setIsIkEnabled] = useState(true);\n  const [targetFps, setTargetFps] = useState(TIMING.DEFAULT_TARGET_FPS);\n  const [isConsoleVisible, setIsConsoleVisible] = useState(true);\n  const [zoomIndex, setZoomIndex] = useState(UI.DEFAULT_ZOOM_INDEX);\n  const [panOffset, setPanOffset] = useState<Vector2D>({ x: 0, y: 0 });\n  const [viewBox, setViewBox] = useState(`${UI.BASE_VIEWBOX.x} ${UI.BASE_VIEWBOX.y} ${UI.BASE_VIEWBOX.width} ${UI.BASE_VIEWBOX.height}`);\n  \n  const [engineMode, setEngineMode] = useState<'locomotion' | 'idle'>('locomotion');\n  const [activePins, setActivePins] = useState<string[]>([]);\n  const [gravityCenter, setGravityCenter] = useState<'left' | 'center' | 'right'>('center');\n  \n  const [gait, setGait] = useState<WalkingEngineGait>(GaitSynthesizer.synthesizeGait(CharacterGenerator.generateCharacter('Default'), 1.0));\n  const [idleSettings, setIdleSettings] = useState<IdleSettings>(DEFAULT_IDLE_SETTINGS);\n  const [pivotOffsets, setPivotOffsets] = useState<WalkingEnginePivotOffsets>(DEFAULT_PIVOT_OFFSETS);\n  const [pose, setPose] = useState<WalkingEnginePose>(DEFAULT_RESTING_POSE);\n  const [tensions, setTensions] = useState<Record<string, number>>({});\n  \n  const [activeScripts, setActiveScripts] = useState<MicroScriptInstance[]>([]);\n  const [systemLogs, setSystemLogs] = useState<{ timestamp: string; message: string }[]>([]);\n  const H = 150;\n\n  const locomotionStateRef = useRef<LocomotionState>({ ...INITIAL_LOCOMOTION_STATE });\n  const lastFrameTimeRef = useRef(0);\n  const locomotionWeightRef = useRef(1.0);\n\n  useEffect(() => {\n    library.init().then(() => library.getAllCharacters().then(setCharacters));\n  }, []);\n\n  const logSystem = (msg: string) => setSystemLogs(p => [...p.slice(-15), { timestamp: new Date().toLocaleTimeString(), message: msg }]);\n\n  useEffect(() => {\n    if (!currentCharacter || isPaused) return;\n    const interval = setInterval(() => {\n      const scriptId = BehaviorEngine.shouldTriggerFidget(currentCharacter.tags, vibeScale);\n      if (scriptId) {\n        const scriptDef = MICRO_SCRIPTS[scriptId];\n        setActiveScripts(prev => {\n          if (prev.some(s => s.scriptId === scriptId)) return prev;\n          return [...prev, {\n            id: `script_${Date.now()}`,\n            scriptId,\n            startTime: performance.now(),\n            duration: scriptDef.duration,\n            weight: vibeScale\n          }];\n        });\n        logSystem(`Proc-Trigger: ${scriptId.toUpperCase()}`);\n      }\n    }, 2000);\n    return () => clearInterval(interval);\n  }, [currentCharacter, vibeScale, isPaused]);\n\n  const generateCharacter = async () => {\n    const prompt = charDescription.trim() || 'Bitruvian Walker';\n    // Mixed entropy ensures unique manifestations even for the same text prompt\n    const char = CharacterGenerator.generateCharacter(prompt, Math.random() * 1000000 + Date.now());\n    await library.saveCharacter(char);\n    setCharacters(p => [...p, char]);\n    setCurrentCharacter(char);\n    setGait(GaitSynthesizer.synthesizeGait(char, vibeScale));\n    setCharDescription('');\n    logSystem(`Genome Calibrated: ${char.name}`);\n  };\n\n  useEffect(() => {\n    if (currentCharacter) setGait(GaitSynthesizer.synthesizeGait(currentCharacter, vibeScale));\n  }, [vibeScale, currentCharacter]);\n\n  useEffect(() => {\n    const zoom = UI.ZOOM_LEVELS[zoomIndex];\n    const newWidth = UI.BASE_VIEWBOX.width / zoom;\n    const newHeight = UI.BASE_VIEWBOX.height / zoom;\n    setViewBox(`${UI.BASE_VIEWBOX.x - (newWidth - UI.BASE_VIEWBOX.width) / 2 + panOffset.x} ${UI.BASE_VIEWBOX.y - (newHeight - UI.BASE_VIEWBOX.height) / 2 + panOffset.y} ${newWidth} ${newHeight}`);\n  }, [zoomIndex, panOffset]);\n\n  const generatePoseAtPhase = useCallback((phase: number) => {\n    const p = (phase * Math.PI * 2);\n    const locPose = updateLocomotionPhysics(p, { ...INITIAL_LOCOMOTION_STATE }, gait, DEFAULT_PHYSICS, DEFAULT_PROPORTIONS, activePins, 150, gravityCenter, H, isIkEnabled, 1.0);\n    const { adjustedPose } = applyFootGrounding(locPose, DEFAULT_PROPORTIONS, H, DEFAULT_PHYSICS, activePins, idleSettings, gravityCenter, 1.0, 16);\n    return adjustedPose as WalkingEnginePose;\n  }, [gait, activePins, idleSettings, isIkEnabled, gravityCenter]);\n\n  useEffect(() => {\n    let frame: number;\n    const animate = (time: number) => {\n      frame = requestAnimationFrame(animate);\n      if (isPaused) return;\n      const elapsed = time - lastFrameTimeRef.current;\n      if (elapsed < 1000 / targetFps) return;\n      lastFrameTimeRef.current = time;\n\n      const targetWeight = engineMode === 'locomotion' ? 1.0 : 0.0;\n      locomotionWeightRef.current = lerp(locomotionWeightRef.current, targetWeight, 0.08);\n      const locWeight = locomotionWeightRef.current;\n\n      const p = (time * 0.005 * gait.frequency) % (Math.PI * 2);\n      \n      const locPose = updateLocomotionPhysics(p, locomotionStateRef.current, gait, DEFAULT_PHYSICS, DEFAULT_PROPORTIONS, activePins, 150, gravityCenter, H, isIkEnabled, locWeight);\n      const idlePose = updateIdlePhysics(time, elapsed, idleSettings, locWeight, currentCharacter?.tags || []);\n      const { pose: scriptPose, remaining } = processActiveScripts(time, activeScripts);\n      if (remaining.length !== activeScripts.length) setActiveScripts(remaining);\n\n      const blendedPose = BehaviorEngine.blendPose(locPose, idlePose, scriptPose, locWeight, gait, time);\n      const { adjustedPose, tensions: groundTensions } = applyFootGrounding(blendedPose, DEFAULT_PROPORTIONS, H, DEFAULT_PHYSICS, activePins, idleSettings, gravityCenter, locWeight, elapsed);\n      \n      setTensions(groundTensions);\n      setPose(adjustedPose as WalkingEnginePose);\n    };\n    frame = requestAnimationFrame(animate);\n    return () => cancelAnimationFrame(frame);\n  }, [isPaused, gait, activePins, idleSettings, isIkEnabled, targetFps, engineMode, activeScripts, currentCharacter, gravityCenter]);\n\n  const categories = ['Primary', 'Body', 'Arms', 'Legs', 'Effects'];\n\n  return (\n    <div className=\"w-full h-full flex bg-shell select-none overflow-hidden font-mono text-ink\">\n      {isConsoleVisible && (\n        <div className=\"w-80 border-r border-ridge bg-white p-4 flex flex-col gap-1 custom-scrollbar overflow-y-auto shrink-0 z-20 shadow-2xl\">\n          <h1 className=\"text-xl font-archaic tracking-[0.3em] border-b-4 border-selection pb-1 text-ink uppercase italic flex items-center justify-between\">\n            <span>BITRUVIUS</span>\n            <span className=\"text-[8px] bg-selection text-white px-2 py-0.5\">0.2.C</span>\n          </h1>\n          \n          <CollapsibleSection title=\"Behavioral Prompting\" defaultOpen={true}>\n            <textarea \n              value={charDescription}\n              onChange={(e) => setCharDescription(e.target.value)}\n              placeholder=\"e.g. 'A regally stiff queen' or 'A crouched sneaky villain'\"\n              className=\"w-full h-16 p-2.5 bg-shell border border-ridge text-[9px] resize-none focus:outline-none focus:border-selection font-bold\"\n            />\n            <div className=\"flex flex-col gap-2\">\n              <div className=\"flex justify-between text-[8px] font-black uppercase text-mono-light\">\n                  <span>Vibe Intensity</span>\n                  <span className=\"text-selection\">{(vibeScale * 100).toFixed(0)}%</span>\n              </div>\n              <input type=\"range\" min=\"0\" max=\"2\" step=\"0.01\" value={vibeScale} onChange={(e) => setVibeScale(parseFloat(e.target.value))} className=\"w-full h-1 accent-selection\" />\n              <button onClick={generateCharacter} className=\"w-full py-2.5 bg-selection text-white text-[8px] font-black uppercase hover:bg-selection-light transition-all shadow-md\">Calibrate Personality</button>\n            </div>\n          </CollapsibleSection>\n\n          <CollapsibleSection title=\"Gait Matrix\" count={Object.keys(gaitSliderConfig).length}>\n             <div className=\"flex flex-col gap-4 h-72 overflow-y-auto pr-3 custom-scrollbar\">\n               {categories.map(cat => (\n                 <div key={cat} className=\"flex flex-col gap-2.5\">\n                    <div className=\"text-[7px] font-black text-mono-light uppercase border-b border-ridge pb-1 tracking-tighter opacity-60\">{cat} Layers</div>\n                    {Object.entries(gaitSliderConfig)\n                      .filter(([_, conf]) => conf.category === cat)\n                      .map(([key, conf]) => (\n                        <div key={key} className=\"flex flex-col\">\n                           <div className=\"flex justify-between text-[7px] font-black text-selection uppercase\">\n                              <span>{conf.label}</span>\n                              <span className=\"opacity-50\">{gait[key as keyof WalkingEngineGait].toFixed(2)}</span>\n                           </div>\n                           <input \n                              type=\"range\" min={conf.min} max={conf.max} step={conf.step} \n                              value={gait[key as keyof WalkingEngineGait]} \n                              onChange={(e) => setGait(p => ({...p, [key]: parseFloat(e.target.value)}))}\n                              className=\"w-full h-1 accent-selection\"\n                           />\n                        </div>\n                      ))}\n                 </div>\n               ))}\n             </div>\n          </CollapsibleSection>\n\n          <CollapsibleSection title=\"Joint Bias Matrix\" count={18}>\n            <div className=\"grid grid-cols-1 gap-3 h-48 overflow-y-auto pr-3 custom-scrollbar\">\n              {Object.keys(pivotOffsets).map(k => (\n                <div key={k} className=\"flex flex-col border-b border-ridge/20 pb-1\">\n                   <div className=\"flex justify-between text-[7px] font-black uppercase text-mono-light\">\n                      <span>{k.replace('_', '·')}</span>\n                      <span className=\"text-selection font-bold\">{(pivotOffsets[k as keyof WalkingEnginePivotOffsets])}°</span>\n                   </div>\n                   <input \n                      type=\"range\" min=\"-180\" max=\"180\" \n                      value={pivotOffsets[k as keyof WalkingEnginePivotOffsets]} \n                      onChange={(e) => setPivotOffsets(p => ({...p, [k]: parseInt(e.target.value)}))}\n                      className=\"w-full h-1 accent-selection\"\n                   />\n                </div>\n              ))}\n            </div>\n          </CollapsibleSection>\n\n          <CollapsibleSection title=\"Idle Matrix\" count={7}>\n             <div className=\"flex flex-col gap-3\">\n                {Object.keys(DEFAULT_IDLE_SETTINGS).filter(k => k !== 'idlePinnedFeet').map(k => (\n                  <div key={k} className=\"flex flex-col\">\n                    <div className=\"flex justify-between text-[7px] font-black uppercase text-mono-light\">\n                       <span>{k}</span>\n                       <span className=\"text-selection font-bold\">{(idleSettings[k as keyof IdleSettings] as number).toFixed(2)}</span>\n                    </div>\n                    <input \n                      type=\"range\" min=\"0\" max=\"1\" step=\"0.01\" \n                      value={(idleSettings as any)[k]} \n                      onChange={(e) => setIdleSettings(p => ({...p, [k]: parseFloat(e.target.value)}))}\n                      className=\"w-full h-1 accent-selection\"\n                    />\n                  </div>\n                ))}\n             </div>\n          </CollapsibleSection>\n          \n          <div className=\"mt-auto pt-4 border-t border-ridge\">\n             <div className=\"flex gap-1 mb-2\">\n                <button onClick={() => setEngineMode('locomotion')} className={`flex-1 text-[8px] py-1.5 border font-black ${engineMode === 'locomotion' ? 'bg-selection text-white' : 'bg-white'}`}>WALK</button>\n                <button onClick={() => setEngineMode('idle')} className={`flex-1 text-[8px] py-1.5 border font-black ${engineMode === 'idle' ? 'bg-selection text-white' : 'bg-white'}`}>IDLE</button>\n             </div>\n             <SystemLogger logs={systemLogs} isVisible={true} />\n          </div>\n        </div>\n      )}\n\n      <div className=\"flex-1 relative overflow-hidden bg-shell\">\n        <div className=\"absolute top-4 left-4 z-50 flex gap-2\">\n            <button onClick={() => setIsConsoleVisible(!isConsoleVisible)} className=\"p-2.5 bg-white border-2 border-selection hover:bg-shell rounded shadow-lg transition-all\">{isConsoleVisible ? '✕' : '☰'}</button>\n            <div className=\"px-4 py-1 bg-white/95 backdrop-blur-md border-2 border-selection rounded-full text-[9px] font-black text-selection flex items-center gap-3 shadow-lg\">\n                <div className={`w-2 h-2 rounded-full ${engineMode === 'locomotion' ? 'bg-green-500' : 'bg-blue-500'} animate-pulse`} />\n                {engineMode.toUpperCase()} | {Math.round(locomotionWeightRef.current * 100)}% KINETIC WEIGHT\n            </div>\n            <button onClick={() => setIsPaused(!isPaused)} className={`px-5 py-1 text-[9px] font-black border-2 border-selection rounded-full shadow-lg ${isPaused ? 'bg-accent-red text-white' : 'bg-white'}`}>{isPaused ? 'RESUME ENGINE' : 'PAUSE ENGINE'}</button>\n        </div>\n\n        <div className=\"absolute top-4 right-4 flex flex-col gap-2 z-50\">\n          <button onClick={() => setZoomIndex(prev => Math.min(UI.ZOOM_LEVELS.length - 1, prev + 1))} className=\"w-10 h-10 flex items-center justify-center bg-white border-2 border-selection font-black shadow-lg hover:bg-shell rounded-xl transition-transform active:scale-90\">+</button>\n          <button onClick={() => setZoomIndex(UI.DEFAULT_ZOOM_INDEX)} className=\"w-10 h-10 flex items-center justify-center bg-white border-2 border-selection text-[8px] font-black shadow-lg hover:bg-shell rounded-xl transition-transform active:scale-90\">RST</button>\n          <button onClick={() => setZoomIndex(prev => Math.max(0, prev - 1))} className=\"w-10 h-10 flex items-center justify-center bg-white border-2 border-selection font-black shadow-lg hover:bg-shell rounded-xl transition-transform active:scale-90\">-</button>\n        </div>\n\n        <svg viewBox={viewBox} className=\"w-full h-full relative z-10 bg-triangle-grid\">\n          <g transform={`translate(${pose.x_offset}, ${500 - (MANNEQUIN_LOCAL_FLOOR_Y * H) + pose.y_offset})`}>\n            <Mannequin \n              pose={pose} bodyRotation={0} pivotOffsets={pivotOffsets} props={DEFAULT_PROPORTIONS} \n              showPivots={showPivots} baseUnitH={H * (currentCharacter?.anatomy.bodyLength || 1)} \n              onAnchorMouseDown={(k) => setActivePins(p => p.includes(k) ? p.filter(x => x !== k) : [...p, k])} \n              draggingBoneKey={null} isPaused={isPaused} activePins={activePins} tensions={tensions} jointModes={{}} lotteSettings={DEFAULT_LOTTE_SETTINGS}\n              ghosts={[]}\n              ghostDataGenerator={generatePoseAtPhase}\n            />\n          </g>\n        </svg>\n\n        <div className=\"absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-8 text-[8px] font-black text-selection/30 pointer-events-none uppercase tracking-[0.8em] items-center\">\n            <span>BITRUVIUS PHASE 0.2 // CALIBRATION MODE</span>\n            <div className=\"w-1.5 h-1.5 bg-selection/30 rounded-full\" />\n            <span>COG BIAS: {gravityCenter.toUpperCase()}</span>\n        </div>\n      </div>\n    </div>\n  );\n};\n\nexport default App;\n"
+            }
+          ]
+        }
+      ]
+    },
+    "createdTimestamp": {
+      "seconds": 1770438489,
+      "nanos": 956000000
+    },
+    "doneTimestamp": {
+      "seconds": 1770438500,
+      "nanos": 825000000
+    }
+  }
+]
