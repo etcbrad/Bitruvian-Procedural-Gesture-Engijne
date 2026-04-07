@@ -299,4 +299,11 @@ export type IdlePresetTemplate = {
 export type GroundingResults = {
   adjustedPose: Partial<WalkingEnginePose>;
   tensions: Record<string, number>;
+  footState?: {
+    weightBearingFoot: 'left' | 'right' | 'both';
+    swingFoot: 'left' | 'right' | null;
+    contactPose: boolean;
+    leftContact: number;
+    rightContact: number;
+  };
 };

@@ -40,12 +40,6 @@ const gaitSliderConfig: Partial<Record<keyof WalkingEngineGait, { min: number; m
   footDrag: { min: 0, max: 1, step: 0.01, label: 'Frictional Drag', category: 'Effects' },
 };
 
-const gaitModeOptions: { mode: GaitMode; label: string; note: string }[] = [
-  { mode: 'walk', label: 'WALK', note: 'grounded' },
-  { mode: 'jog', label: 'JOG', note: 'balanced' },
-  { mode: 'run', label: 'RUN', note: 'driving' },
-];
-
 type StrideEntryStyle = 'tiptoe' | 'neutral' | 'drive';
 
 const strideEntryOptions: { style: StrideEntryStyle; label: string; note: string }[] = [
@@ -55,10 +49,28 @@ const strideEntryOptions: { style: StrideEntryStyle; label: string; note: string
 ];
 
 const STRIDE_BANDS: Record<GaitMode, { uiMin: number; uiMax: number; actualMin: number; actualMax: number }> = {
-  walk: { uiMin: 0, uiMax: 50, actualMin: 0.22, actualMax: 0.95 },
-  jog: { uiMin: 50, uiMax: 75, actualMin: 0.95, actualMax: 1.45 },
-  run: { uiMin: 75, uiMax: 100, actualMin: 1.45, actualMax: 2.05 },
+  walk: { uiMin: 0, uiMax: 50, actualMin: 0.12, actualMax: 0.65 },
+  jog: { uiMin: 50, uiMax: 75, actualMin: 0.65, actualMax: 1.22 },
+  run: { uiMin: 75, uiMax: 100, actualMin: 1.22, actualMax: 1.95 },
 };
+
+const gaitModeOptions: { mode: GaitMode; label: string; note: string }[] = [
+  {
+    mode: 'walk',
+    label: 'WALK',
+    note: `compact ${Math.round(STRIDE_BANDS.walk.actualMin * 100)}-${Math.round(STRIDE_BANDS.walk.actualMax * 100)} stride`,
+  },
+  {
+    mode: 'jog',
+    label: 'JOG',
+    note: `measured ${Math.round(STRIDE_BANDS.jog.actualMin * 100)}-${Math.round(STRIDE_BANDS.jog.actualMax * 100)} stride`,
+  },
+  {
+    mode: 'run',
+    label: 'RUN',
+    note: `extended ${Math.round(STRIDE_BANDS.run.actualMin * 100)}-${Math.round(STRIDE_BANDS.run.actualMax * 100)} stride`,
+  },
+];
 
 type GaitAdjustment = { mul?: number; add?: number; min?: number; max?: number };
 
@@ -194,7 +206,7 @@ const App: React.FC = () => {
   const [library] = useState(() => new CharacterLibraryManager());
   const [currentCharacter, setCurrentCharacter] = useState<CharacterMorphology | null>(null);
   const [charDescription, setCharDescription] = useState('');
-  const [gaitMode, setGaitMode] = useState<GaitMode>('jog');
+  const [gaitMode, setGaitMode] = useState<GaitMode>('walk');
   const [strideEntryStyle, setStrideEntryStyle] = useState<StrideEntryStyle>('tiptoe');
   
   const [showPivots, setShowPivots] = useState(true);
@@ -211,6 +223,13 @@ const App: React.FC = () => {
   
   const [engineMode, setEngineMode] = useState<'locomotion' | 'idle'>('locomotion');
   const [tensions, setTensions] = useState<Record<string, number>>({});
+  const [groundingState, setGroundingState] = useState<{
+    weightBearingFoot: 'left' | 'right' | 'both';
+    swingFoot: 'left' | 'right' | null;
+    contactPose: boolean;
+    leftContact: number;
+    rightContact: number;
+  } | null>(null);
   const [systemLogs, setSystemLogs] = useState<{ timestamp: string; message: string }[]>([]);
   const H = 150;
 
@@ -222,6 +241,7 @@ const App: React.FC = () => {
   const strideEntryStyleRef = useRef<StrideEntryStyle>('tiptoe');
   const gaitBaseRef = useRef<WalkingEngineGait>(normalizeGaitModeEnvelope(gait, gaitMode));
   const isPausedRef = useRef(isPaused);
+  const exportLockRef = useRef(false);
 
   useEffect(() => {
     library.init();
@@ -231,7 +251,9 @@ const App: React.FC = () => {
     isPausedRef.current = isPaused;
   }, [isPaused]);
 
-  const logSystem = (msg: string) => setSystemLogs(p => [...p.slice(-15), { timestamp: new Date().toLocaleTimeString(), message: msg }]);
+  const logSystem = useCallback((msg: string) => {
+    setSystemLogs((p) => [...p.slice(-15), { timestamp: new Date().toLocaleTimeString(), message: msg }]);
+  }, []);
 
   const applyDisplayedGaitFromBase = useCallback((nextBase: WalkingEngineGait) => {
     gaitBaseRef.current = nextBase;
@@ -338,6 +360,7 @@ const App: React.FC = () => {
       pose: {
         x: pose.x_offset,
         y: pose.y_offset,
+        stridePhase: pose.stride_phase,
         waist: pose.waist,
         torso: pose.torso,
         collar: pose.collar,
@@ -366,6 +389,11 @@ const App: React.FC = () => {
         fidgetFrequency: idleSettings.fidgetFrequency,
       },
       activePins: safeActivePins,
+      supportFoot: groundingState?.weightBearingFoot ?? (pose.stride_phase !== undefined ? (pose.stride_phase < 0.5 ? 'left' : 'right') : null),
+      swingFoot: groundingState?.swingFoot ?? null,
+      contactPose: groundingState?.contactPose ?? false,
+      contactScores: groundingState ? { left: groundingState.leftContact, right: groundingState.rightContact } : null,
+      grounding: groundingState,
       activeScripts: activeScriptsRef.current.length,
       gravityCenter,
       logs: systemLogs.slice(-5),
@@ -377,12 +405,13 @@ const App: React.FC = () => {
       const target = window as Window & { render_game_to_text?: () => string };
       if (target.render_game_to_text === renderGameToText) delete target.render_game_to_text;
     };
-  }, [engineMode, isPaused, zoomIndex, currentCharacter, pose, gait, idleSettings, safeActivePins, gravityCenter, gaitMode, strideEntryStyle, systemLogs, isExporting]);
+  }, [engineMode, isPaused, zoomIndex, currentCharacter, pose, gait, idleSettings, safeActivePins, gravityCenter, gaitMode, strideEntryStyle, systemLogs, isExporting, groundingState]);
 
   const generatePoseAtPhase = useCallback((phase: number) => {
     const p = (phase * Math.PI * 2);
     const locPose = updateLocomotionPhysics(p, { ...INITIAL_LOCOMOTION_STATE }, gait, DEFAULT_PHYSICS, 1.0);
-    const { adjustedPose } = applyFootGrounding(locPose, DEFAULT_PROPORTIONS, H, DEFAULT_PHYSICS, safeActivePins, idleSettings, gravityCenter, 1.0, 16);
+    const grounded = applyFootGrounding(locPose, DEFAULT_PROPORTIONS, H, DEFAULT_PHYSICS, safeActivePins, idleSettings, gravityCenter, 1.0, 16);
+    const { adjustedPose } = grounded;
     return adjustedPose as WalkingEnginePose;
   }, [gait, safeActivePins, idleSettings, gravityCenter]);
 
@@ -401,9 +430,11 @@ const App: React.FC = () => {
   const exportFps = Math.min(24, targetFps);
 
   const requestExport = useCallback((mode: 'frames' | 'keyframes' | 'animated') => {
-    if (isExporting) return;
+    if (exportLockRef.current || isExporting || pendingExport) return;
+    exportLockRef.current = true;
+    setIsExporting(true);
     setPendingExport({ mode });
-  }, [isExporting]);
+  }, [isExporting, pendingExport]);
 
   useEffect(() => {
     if (!pendingExport) return;
@@ -415,7 +446,6 @@ const App: React.FC = () => {
       if (shouldRestorePause) {
         setIsPaused(true);
       }
-      setIsExporting(true);
       try {
         if (pendingExport.mode === 'frames') {
           logSystem('Export: loop frames zip');
@@ -427,8 +457,8 @@ const App: React.FC = () => {
           if (!cancelled) logSystem('Export complete: keyframes zip');
         } else {
           logSystem(`Export: animated ${exportFormat.toUpperCase()}`);
-          const animatedExportFps = exportFormat === 'gif' ? Math.min(12, exportFps) : exportFps;
-          const animatedExportScale = exportFormat === 'gif' ? 0.6 : 0.75;
+          const animatedExportFps = exportFormat === 'gif' ? Math.min(6, exportFps) : Math.min(12, exportFps);
+          const animatedExportScale = exportFormat === 'gif' ? 0.45 : 0.7;
           await exportAnimatedLoop(context, generatePoseAtPhase, animatedExportFps, exportFormat, animatedExportScale);
           if (!cancelled) logSystem(`Export complete: animated ${exportFormat.toUpperCase()}`);
         }
@@ -439,9 +469,13 @@ const App: React.FC = () => {
         if (!cancelled) {
           setIsExporting(false);
           setPendingExport(null);
+          exportLockRef.current = false;
           if (shouldRestorePause) {
             setIsPaused(false);
           }
+        }
+        if (cancelled) {
+          exportLockRef.current = false;
         }
       }
     };
@@ -474,9 +508,10 @@ const App: React.FC = () => {
       if (remaining.length !== activeScripts.length) activeScriptsRef.current = remaining;
 
       const blendedPose = BehaviorEngine.blendPose(locPose, idlePose, scriptPose, locWeight, gait, time);
-      const { adjustedPose, tensions: groundTensions } = applyFootGrounding(blendedPose, DEFAULT_PROPORTIONS, H, DEFAULT_PHYSICS, activePins, idleSettings, gravityCenter, locWeight, elapsed);
+      const { adjustedPose, tensions: groundTensions, footState } = applyFootGrounding(blendedPose, DEFAULT_PROPORTIONS, H, DEFAULT_PHYSICS, activePins, idleSettings, gravityCenter, locWeight, elapsed);
       
       setTensions(groundTensions);
+      setGroundingState(footState ?? null);
       setPose(adjustedPose as WalkingEnginePose);
     };
     frame = requestAnimationFrame(animate);

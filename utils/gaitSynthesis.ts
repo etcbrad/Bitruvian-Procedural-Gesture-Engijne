@@ -5,46 +5,46 @@ type GaitAdjustment = { mul?: number; add?: number; min?: number; max?: number }
 
 const MODE_ENVELOPES: Record<GaitMode, Partial<Record<keyof WalkingEngineGait, GaitAdjustment>>> = {
   walk: {
-    intensity: { mul: 0.86, min: 0.4, max: 1.65 },
-    frequency: { mul: 0.78, min: 0.18, max: 2.1 },
-    stride: { mul: 0.74, min: 0.25, max: 1.55 },
-    verticality: { mul: 0.72, min: 0.2, max: 1.1 },
-    arm_swing: { mul: 0.74, min: 0.15, max: 1.7 },
-    footDrag: { mul: 1.04, min: 0.1, max: 1.25 },
-    gravity: { mul: 1.04, min: 0.15, max: 1.15 },
-    kick_up_force: { mul: 0.92, min: 0, max: 1.25 },
-    foot_roll: { mul: 1.08, min: 0.15, max: 1.25 },
-    hip_sway: { mul: 0.88, min: 0.05, max: 2.2 },
-    elbow_bend: { mul: 0.94, min: 0, max: 1.9 },
-    torso_swivel: { mul: 0.9, min: 0, max: 1.4 },
+    intensity: { mul: 0.8, min: 0.35, max: 1.45 },
+    frequency: { mul: 0.74, min: 0.18, max: 1.7 },
+    stride: { mul: 0.62, min: 0.18, max: 1.05 },
+    verticality: { mul: 0.68, min: 0.2, max: 0.95 },
+    arm_swing: { mul: 0.68, min: 0.12, max: 1.45 },
+    footDrag: { mul: 1.06, min: 0.1, max: 1.2 },
+    gravity: { mul: 1.06, min: 0.18, max: 1.1 },
+    kick_up_force: { mul: 0.88, min: 0, max: 1.05 },
+    foot_roll: { mul: 1.04, min: 0.12, max: 1.1 },
+    hip_sway: { mul: 0.82, min: 0.05, max: 1.9 },
+    elbow_bend: { mul: 0.9, min: 0, max: 1.65 },
+    torso_swivel: { mul: 0.84, min: 0, max: 1.15 },
   },
   jog: {
-    intensity: { mul: 1.0, min: 0.55, max: 2 },
-    frequency: { mul: 1.0, min: 0.2, max: 2.5 },
-    stride: { mul: 1.0, min: 0.35, max: 1.9 },
-    verticality: { mul: 0.95, min: 0.25, max: 1.2 },
-    arm_swing: { mul: 0.98, min: 0.2, max: 2.1 },
-    footDrag: { mul: 0.98, min: 0.1, max: 1.2 },
-    gravity: { mul: 0.98, min: 0.15, max: 1.1 },
-    kick_up_force: { mul: 0.96, min: 0, max: 1.25 },
-    foot_roll: { mul: 1.0, min: 0.1, max: 1.2 },
-    hip_sway: { mul: 1.0, min: 0.05, max: 2.4 },
-    elbow_bend: { mul: 1.0, min: 0, max: 2 },
-    torso_swivel: { mul: 1.0, min: 0, max: 1.5 },
+    intensity: { mul: 0.96, min: 0.5, max: 1.85 },
+    frequency: { mul: 0.95, min: 0.35, max: 2.15 },
+    stride: { mul: 0.92, min: 0.35, max: 1.5 },
+    verticality: { mul: 0.92, min: 0.25, max: 1.1 },
+    arm_swing: { mul: 0.96, min: 0.18, max: 1.9 },
+    footDrag: { mul: 0.98, min: 0.08, max: 1.1 },
+    gravity: { mul: 1.0, min: 0.15, max: 1.0 },
+    kick_up_force: { mul: 0.98, min: 0, max: 1.15 },
+    foot_roll: { mul: 1.0, min: 0.1, max: 1.15 },
+    hip_sway: { mul: 0.98, min: 0.05, max: 2.0 },
+    elbow_bend: { mul: 0.98, min: 0, max: 1.85 },
+    torso_swivel: { mul: 0.98, min: 0, max: 1.25 },
   },
   run: {
-    intensity: { mul: 1.16, min: 0.7, max: 2.4 },
-    frequency: { mul: 1.23, min: 0.28, max: 3.1 },
-    stride: { mul: 1.17, min: 0.45, max: 2.25 },
-    verticality: { mul: 1.16, min: 0.4, max: 1.35 },
-    arm_swing: { mul: 1.24, min: 0.25, max: 2.7 },
-    footDrag: { mul: 0.82, min: 0.1, max: 1.0 },
-    gravity: { mul: 0.88, min: 0.1, max: 1.0 },
-    kick_up_force: { mul: 1.12, min: 0, max: 1.4 },
-    foot_roll: { mul: 1.08, min: 0.1, max: 1.3 },
-    hip_sway: { mul: 1.08, min: 0.05, max: 2.6 },
-    elbow_bend: { mul: 1.08, min: 0, max: 2.2 },
-    torso_swivel: { mul: 1.08, min: 0, max: 1.8 },
+    intensity: { mul: 1.14, min: 0.65, max: 2.25 },
+    frequency: { mul: 1.18, min: 0.5, max: 2.8 },
+    stride: { mul: 1.16, min: 0.55, max: 2.0 },
+    verticality: { mul: 1.12, min: 0.35, max: 1.25 },
+    arm_swing: { mul: 1.2, min: 0.22, max: 2.45 },
+    footDrag: { mul: 0.84, min: 0.08, max: 0.95 },
+    gravity: { mul: 0.9, min: 0.1, max: 0.95 },
+    kick_up_force: { mul: 1.08, min: 0, max: 1.25 },
+    foot_roll: { mul: 1.06, min: 0.08, max: 1.2 },
+    hip_sway: { mul: 1.04, min: 0.05, max: 2.35 },
+    elbow_bend: { mul: 1.04, min: 0, max: 2 },
+    torso_swivel: { mul: 1.04, min: 0, max: 1.5 },
   },
 };
 
@@ -162,10 +162,30 @@ export class GaitSynthesizer {
     return Math.min(2, g.stride.base * (1 + g.frequency.base * 0.5) * (1 - g.energyCost * 0.3));
   }
   private static calculateFrequency(g: GaitGenome, anat: any): number {
-    return g.frequency.base * (1 + (anat.limbCount - 2) * 0.1) * (2 - g.weight);
+    const paceNeed = clamp(
+      0.2
+        + ((anat.limbLength ?? 1) - 0.5) * 0.14
+        + ((g.agility ?? 0.5) - 0.5) * 0.2
+        + ((g.confidence ?? 0.5) - 0.5) * 0.08
+        - (g.energyCost * 0.12),
+      -0.15,
+      0.55,
+    );
+    return clamp(0.58 + (g.frequency.base * 0.34) + paceNeed, 0.45, 2.1);
   }
   private static calculateStride(g: GaitGenome, anat: any): number {
-    return g.stride.base * (1 + anat.limbLength * 0.2) * (1 - g.energyCost * 0.2);
+    const reachNeed = clamp(
+      0.12
+        + ((anat.limbLength ?? 1) - 0.5) * 0.16
+        + ((g.frequency.base ?? 1) - 1) * 0.18
+        + ((g.agility ?? 0.5) - 0.5) * 0.22
+        - (g.energyCost * 0.1),
+      0,
+      1,
+    );
+    const longStrideBoost = lerp(0.82, 1.12, reachNeed);
+    const economy = clamp(1 - g.energyCost * 0.14, 0.72, 1.0);
+    return clamp((0.24 + g.stride.base * 0.3 + (anat.limbLength ?? 1) * 0.05) * economy * longStrideBoost, 0.16, 1.55);
   }
   private static calculateLean(g: GaitGenome, anat: any): number {
     return g.bodyPitch.base * (anat.centerOfMass - 0.5) * 2.5;

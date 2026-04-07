@@ -35,7 +35,7 @@ export const useMannequinStore = create<MannequinStore>((set) => ({
   pose: DEFAULT_RESTING_POSE,
   gait: applyGaitModeEnvelope(
     GaitSynthesizer.synthesizeGait(CharacterGenerator.generateCharacter('Default'), 1.0),
-    'jog' satisfies GaitMode
+    'walk' satisfies GaitMode
   ),
   idleSettings: DEFAULT_IDLE_SETTINGS,
   pivotOffsets: DEFAULT_PIVOT_OFFSETS,

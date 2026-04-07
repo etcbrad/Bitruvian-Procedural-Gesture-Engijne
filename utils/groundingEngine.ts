@@ -6,6 +6,12 @@ import { MANNEQUIN_LOCAL_FLOOR_Y, GROUNDING_PHYSICS, ANATOMY_RAW_RELATIVE_TO_BAS
 import { lerp, clamp, solve2DJointIK } from './kinematics';
 import { calculateFootTipGlobalPosition } from './locomotionEngine';
 
+const normalizeStridePhase = (phase: number | undefined): number => {
+    if (!Number.isFinite(phase ?? Number.NaN)) return 0;
+    const wrapped = (phase ?? 0) % 1;
+    return wrapped < 0 ? wrapped + 1 : wrapped;
+};
+
 export const applyFootGrounding = (
     rawPose: Partial<WalkingEnginePose>,
     props: WalkingEngineProportions,
@@ -49,11 +55,43 @@ export const applyFootGrounding = (
         foot: adjustedPose.r_foot ?? 0, 
     }, props, baseUnitH, true);
 
+    const cyclePhase = normalizeStridePhase(adjustedPose.stride_phase);
+    const phaseSupportFoot: 'left' | 'right' = cyclePhase < 0.5 ? 'left' : 'right';
+    const contactTolerance = baseUnitH * 0.08;
+    const leftWorldY = lFootNatural.y + currentBodyY;
+    const rightWorldY = rFootNatural.y + currentBodyY;
+    const leftContactScore = clamp(1 - Math.abs(floorYGlobal - leftWorldY) / contactTolerance, 0, 1);
+    const rightContactScore = clamp(1 - Math.abs(floorYGlobal - rightWorldY) / contactTolerance, 0, 1);
+    const phaseSupportScore = 0.62 + (0.38 * Math.abs(Math.cos(cyclePhase * Math.PI * 2)));
+    const contactPose = locomotionWeight > 0.08 && leftContactScore > 0.42 && rightContactScore > 0.42;
+    const heightSupportFoot: 'left' | 'right' = leftWorldY >= rightWorldY ? 'left' : 'right';
+    const autoSupportFoot: 'left' | 'right' | null = locomotionWeight > 0.08 && locomotionActivePins.length === 0
+        ? (
+            contactPose
+                ? (leftContactScore >= rightContactScore ? 'left' : 'right')
+                : (Math.abs(leftContactScore - rightContactScore) > 0.12
+                    ? (leftContactScore > rightContactScore ? 'left' : 'right')
+                    : (phaseSupportScore >= 0.5 ? phaseSupportFoot : heightSupportFoot))
+          )
+        : null;
+    const secondaryContactFoot: 'left' | 'right' | null = contactPose
+        ? (autoSupportFoot === 'left' ? 'right' : 'left')
+        : null;
+    const autoSupportStrength = clamp(0.78 + locomotionWeight * 0.22, 0.78, 1);
+    const autoSecondaryStrength = contactPose
+        ? clamp(0.35 + Math.min(leftContactScore, rightContactScore) * 0.5, 0.35, 0.85)
+        : 0;
+
     const idleGroundingBonus = locomotionWeight < 0.2 ? 1.5 : 1.0;
     const yCorrectionStrength = GROUNDING_PHYSICS.GROUNDING_SPRING_FACTOR * (1 - physics.jointElasticity) * idleGroundingBonus;
     const xCorrectionStrength = GROUNDING_PHYSICS.GROUNDING_X_STABILITY_FACTOR * (1 - physics.stabilization);
 
-    if (pinStrengthL > 0.01 || pinStrengthR > 0.01) {
+    const supportPinStrengthL = autoSupportFoot === 'left' ? autoSupportStrength : secondaryContactFoot === 'left' ? autoSecondaryStrength : 0.0;
+    const supportPinStrengthR = autoSupportFoot === 'right' ? autoSupportStrength : secondaryContactFoot === 'right' ? autoSecondaryStrength : 0.0;
+    const effectivePinStrengthL = Math.max(pinStrengthL, supportPinStrengthL);
+    const effectivePinStrengthR = Math.max(pinStrengthR, supportPinStrengthR);
+
+    if (effectivePinStrengthL > 0.01 || effectivePinStrengthR > 0.01) {
         const thighLengthL = (props.l_upper_leg?.h ?? 1) * ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_UPPER * baseUnitH;
         const calfLengthL = (props.l_lower_leg?.h ?? 1) * ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_LOWER * baseUnitH;
         const thighLengthR = (props.r_upper_leg?.h ?? 1) * ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_UPPER * baseUnitH;
@@ -71,39 +109,43 @@ export const applyFootGrounding = (
         const calculateYCorrection = (isRight: boolean, weight: number) => {
             const reach = isRight ? maxLegReachR : maxLegReachL;
             const footNatY = isRight ? rFootNatural.y : lFootNatural.y;
+            const supportWeight = isRight ? effectivePinStrengthR : effectivePinStrengthL;
+            const supportOffsetX = autoSupportFoot
+                ? (autoSupportFoot === 'right' ? dynamicSpread * 0.35 : -dynamicSpread * 0.35)
+                : 0;
             
-            let targetAnkleX = 0;
-            if (pinStrengthL > 0.5 && pinStrengthR > 0.5) {
+            let targetAnkleX = supportOffsetX;
+            if (effectivePinStrengthL > 0.5 && effectivePinStrengthR > 0.5) {
                 targetAnkleX = isRight ? dynamicSpread : -dynamicSpread;
-            } else if (pinStrengthL > 0.5) {
+            } else if (effectivePinStrengthL > 0.5) {
                 targetAnkleX = -dynamicSpread * 0.5;
-            } else if (pinStrengthR > 0.5) {
+            } else if (effectivePinStrengthR > 0.5) {
                 targetAnkleX = dynamicSpread * 0.5;
             }
 
             const hipToTargetX = targetAnkleX - currentBodyX;
             const hipToTargetX_sq = hipToTargetX * hipToTargetX;
 
-            const transitionTargetY = lerp(footNatY + currentBodyY, floorYGlobal, weight);
+            const transitionTargetY = lerp(footNatY + currentBodyY, floorYGlobal, supportWeight);
 
             if (hipToTargetX_sq > reach * reach) {
                 const xOffsetCorr = (Math.abs(hipToTargetX) - (reach * 0.99)) * Math.sign(hipToTargetX);
-                currentBodyX += xOffsetCorr * xCorrectionStrength * weight;
-                return (transitionTargetY - currentBodyY) * weight;
+                currentBodyX += xOffsetCorr * xCorrectionStrength * supportWeight;
+                return (transitionTargetY - currentBodyY) * supportWeight;
             }
 
             const requiredYDist = Math.sqrt(reach * reach - hipToTargetX_sq);
             const requiredHipY = transitionTargetY - requiredYDist;
-            return (requiredHipY - currentBodyY) * weight;
+            return (requiredHipY - currentBodyY) * supportWeight;
         };
 
-        if (pinStrengthL > 0.01) {
-            yCorrection += calculateYCorrection(false, pinStrengthL);
-            totalPinWeight += pinStrengthL;
+        if (effectivePinStrengthL > 0.01) {
+            yCorrection += calculateYCorrection(false, effectivePinStrengthL);
+            totalPinWeight += effectivePinStrengthL;
         }
-        if (pinStrengthR > 0.01) {
-            yCorrection += calculateYCorrection(true, pinStrengthR);
-            totalPinWeight += pinStrengthR;
+        if (effectivePinStrengthR > 0.01) {
+            yCorrection += calculateYCorrection(true, effectivePinStrengthR);
+            totalPinWeight += effectivePinStrengthR;
         }
         
         const verticalStickiness = locomotionWeight < 0.1 ? 0.8 : yCorrectionStrength;
@@ -148,11 +190,11 @@ export const applyFootGrounding = (
             }
         };
 
-        if (pinStrengthL > 0.01) solveAndApplyIK(false, pinStrengthL);
-        if (pinStrengthR > 0.01) solveAndApplyIK(true, pinStrengthR);
+        if (effectivePinStrengthL > 0.01) solveAndApplyIK(false, effectivePinStrengthL);
+        if (effectivePinStrengthR > 0.01) solveAndApplyIK(true, effectivePinStrengthR);
         
     } else {
-        const lowestFootY = Math.min(lFootNatural.y + currentBodyY, rFootNatural.y + currentBodyY);
+        const lowestFootY = Math.max(leftWorldY, rightWorldY);
         
         if (lowestFootY > floorYGlobal - GROUNDING_PHYSICS.FOOT_LIFT_THRESHOLD_H_UNIT * baseUnitH) {
             const correctionY = floorYGlobal - lowestFootY;
@@ -189,5 +231,17 @@ export const applyFootGrounding = (
     adjustedPose.x_offset = currentBodyX;
     adjustedPose.y_offset = currentBodyY;
 
-    return { adjustedPose, tensions };
+    const footState = {
+        weightBearingFoot: contactPose
+            ? 'both'
+            : (effectivePinStrengthL >= effectivePinStrengthR ? 'left' : 'right'),
+        swingFoot: contactPose
+            ? null
+            : (effectivePinStrengthL >= effectivePinStrengthR ? 'right' : 'left'),
+        contactPose,
+        leftContact: leftContactScore,
+        rightContact: rightContactScore,
+    } as const;
+
+    return { adjustedPose, tensions, footState };
 };
