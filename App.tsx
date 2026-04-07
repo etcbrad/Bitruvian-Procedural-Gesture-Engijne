@@ -205,7 +205,6 @@ const App: React.FC = () => {
 
   const [library] = useState(() => new CharacterLibraryManager());
   const [currentCharacter, setCurrentCharacter] = useState<CharacterMorphology | null>(null);
-  const [charDescription, setCharDescription] = useState('');
   const [gaitMode, setGaitMode] = useState<GaitMode>('walk');
   const [strideEntryStyle, setStrideEntryStyle] = useState<StrideEntryStyle>('tiptoe');
   
@@ -229,6 +228,12 @@ const App: React.FC = () => {
     contactPose: boolean;
     leftContact: number;
     rightContact: number;
+    supportLoad: number;
+    groundBounce: number;
+    leftChain: number;
+    rightChain: number;
+    leftCompression: number;
+    rightCompression: number;
   } | null>(null);
   const [systemLogs, setSystemLogs] = useState<{ timestamp: string; message: string }[]>([]);
   const H = 150;
@@ -237,7 +242,7 @@ const App: React.FC = () => {
   const locomotionStateRef = useRef<LocomotionState>({ ...INITIAL_LOCOMOTION_STATE });
   const lastFrameTimeRef = useRef(0);
   const locomotionWeightRef = useRef(1.0);
-  const gaitModeRef = useRef<GaitMode>('jog');
+  const gaitModeRef = useRef<GaitMode>('walk');
   const strideEntryStyleRef = useRef<StrideEntryStyle>('tiptoe');
   const gaitBaseRef = useRef<WalkingEngineGait>(normalizeGaitModeEnvelope(gait, gaitMode));
   const isPausedRef = useRef(isPaused);
@@ -314,15 +319,24 @@ const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [currentCharacter, vibeScale, isPaused]);
 
-  const generateCharacter = async () => {
-    const prompt = charDescription.trim() || 'Bitruvian Walker';
-    // Mixed entropy ensures unique manifestations even for the same text prompt
+  const generateProceduralWalkCycle = async () => {
+    const modePrompt: Record<GaitMode, string> = {
+      walk: 'compact grounded walker',
+      jog: 'measured elastic jogger',
+      run: 'extended forceful runner',
+    };
+    const entryPrompt: Record<StrideEntryStyle, string> = {
+      tiptoe: 'forefoot entry',
+      neutral: 'midfoot entry',
+      drive: 'push-off entry',
+    };
+    const prompt = `${gaitModeRef.current} ${strideEntryStyleRef.current} ${modePrompt[gaitModeRef.current]} ${entryPrompt[strideEntryStyleRef.current]}`;
+    // Mixed entropy keeps each procedural cycle distinct while still obeying the selected gait mode.
     const char = CharacterGenerator.generateCharacter(prompt, Math.random() * 1000000 + Date.now());
     await library.saveCharacter(char);
     setCurrentCharacter(char);
     applyDisplayedGaitFromBase(GaitSynthesizer.synthesizeGait(char, vibeScale));
-    setCharDescription('');
-    logSystem(`Genome Calibrated: ${char.name}`);
+    logSystem(`Procedural Cycle: ${gaitModeRef.current.toUpperCase()}`);
   };
 
   useEffect(() => {
@@ -527,20 +541,14 @@ const App: React.FC = () => {
             <span className="text-[8px] bg-selection text-white px-2 py-0.5">0.2.C</span>
           </h1>
           
-          <CollapsibleSection title="Behavioral Prompting" defaultOpen={true}>
-            <textarea 
-              value={charDescription}
-              onChange={(e) => setCharDescription(e.target.value)}
-              placeholder="e.g. 'A regally stiff queen' or 'A crouched sneaky villain'"
-              className="w-full h-16 p-2.5 bg-shell border border-ridge text-[9px] resize-none focus:outline-none focus:border-selection font-bold"
-            />
+          <CollapsibleSection title="Procedural Cycle" defaultOpen={true}>
             <div className="flex flex-col gap-2">
               <div className="flex justify-between text-[8px] font-black uppercase text-mono-light">
                   <span>Vibe Intensity</span>
                   <span className="text-selection">{(vibeScale * 100).toFixed(0)}%</span>
               </div>
               <input type="range" min="0" max="2" step="0.01" value={vibeScale} onChange={(e) => setVibeScale(parseFloat(e.target.value))} className="w-full h-1 accent-selection" />
-              <button onClick={generateCharacter} className="w-full py-2.5 bg-selection text-white text-[8px] font-black uppercase hover:bg-selection-light transition-all shadow-md">Calibrate Personality</button>
+              <button onClick={generateProceduralWalkCycle} className="w-full py-2.5 bg-selection text-white text-[8px] font-black uppercase hover:bg-selection-light transition-all shadow-md">Procedural Walk Cycle</button>
             </div>
           </CollapsibleSection>
 

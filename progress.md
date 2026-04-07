@@ -1,0 +1,21 @@
+Original prompt: The knee bending needs to be refined to fit the average walking cycle. Using Lutz and Richard Williams helps us refine this so every walk cycle matches the key poses and better fills in the blanks
+
+- Current task: reduce excessive swing-leg knee lift on slow walks and make elbow motion scale with the same motion energy.
+- Key constraint: keep one foot planted in walk cycles; the trailing foot should not rise too high on low-speed motions.
+- TODO: verify the updated swing/stance timing visually on the 5057 build.
+- TODO: check whether any other limb arcs still over-drive at low frequency.
+- Verified a slow walk capture with the frequency slider genuinely reduced via the native input setter. Knee bend stayed compact and the trailing foot remained much lower than before.
+- Current follow-up: start the app in WALK mode with a tighter stride band and only allow long strides when the character’s reach, frequency, and agility justify it.
+- Tightened the walk stride envelope further so the startup pose should read as a compact walk rather than a long step.
+- Verified startup after the synthesis change: default state opens in WALK mode with frequency near 1.0 and a visibly shorter stride.
+- Follow-up: make the walk/jog/run buttons themselves describe the stride constraint they apply, and keep the synthesis envelope aligned with those visible ranges.
+- Verified the mode toggles now display their constraint bands and switching to RUN updates the rendered gait state correctly.
+- Updated ground awareness so bounce is derived from the support chain instead of a free body bob: foot contact, ankle drive, shin drive, thigh drive, landing, and push-off now feed the body Y correction.
+- Verified the latest preview run after a clean rebuild: no page errors, fresh grounding state includes `supportLoad`, `groundBounce`, `leftChain`, `rightChain`, `leftCompression`, and `rightCompression`.
+- Next tuning pass, if needed: adjust `GROUND_BOUNCE_FACTOR` and the landing/push-off phase windows to make the spring feel stronger or softer without reintroducing float.
+- Removed the free-text prompt field and renamed the action to `Procedural Walk Cycle`.
+- Fixed the procedural action to use the current gait mode ref, then verified the default click now logs `Procedural Cycle: WALK` instead of the stale `JOG`.
+- Current follow-up: if we want stricter mode-specific demos, add a visible mode badge or preset text so walk/jog/run synthesis is obvious at a glance.
+- Refined the lower-limb chain so the knee, shin, ankle, foot, and ground read as one connected action: foot-tip contact now uses the actual foot segment, stance loading/toe-off got smoother, and swing clearance is less abrupt.
+- Verified the latest preview build in the browser harness with no page errors; the current screenshot shows a more grounded step with the lower-leg and foot alignment reading more naturally.
+- Follow-up, if needed: tune stance toe-off vs swing clearance separately for `WALK`, `JOG`, and `RUN` so each mode reads more distinctly at a glance.

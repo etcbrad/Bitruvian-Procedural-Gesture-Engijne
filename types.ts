@@ -305,5 +305,11 @@ export type GroundingResults = {
     contactPose: boolean;
     leftContact: number;
     rightContact: number;
+    supportLoad: number;
+    groundBounce: number;
+    leftChain: number;
+    rightChain: number;
+    leftCompression: number;
+    rightCompression: number;
   };
 };

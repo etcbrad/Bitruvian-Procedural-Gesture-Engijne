@@ -12,6 +12,11 @@ const normalizeStridePhase = (phase: number | undefined): number => {
     return wrapped < 0 ? wrapped + 1 : wrapped;
 };
 
+const smooth01 = (value: number): number => {
+    const x = clamp(value, 0, 1);
+    return x * x * (3 - 2 * x);
+};
+
 export const applyFootGrounding = (
     rawPose: Partial<WalkingEnginePose>,
     props: WalkingEngineProportions,
@@ -43,13 +48,13 @@ export const applyFootGrounding = (
     let currentBodyX = adjustedPose.x_offset ?? 0;
     let currentBodyY = adjustedPose.y_offset ?? 0;
 
-    const lFootNatural = calculateFootTipGlobalPosition({ 
+    const lFootTip = calculateFootTipGlobalPosition({ 
         hip: adjustedPose.l_hip ?? 0, 
         knee: adjustedPose.l_knee ?? 0, 
         foot: adjustedPose.l_foot ?? 0, 
     }, props, baseUnitH, false);
 
-    const rFootNatural = calculateFootTipGlobalPosition({ 
+    const rFootTip = calculateFootTipGlobalPosition({ 
         hip: adjustedPose.r_hip ?? 0, 
         knee: adjustedPose.r_knee ?? 0, 
         foot: adjustedPose.r_foot ?? 0, 
@@ -58,8 +63,8 @@ export const applyFootGrounding = (
     const cyclePhase = normalizeStridePhase(adjustedPose.stride_phase);
     const phaseSupportFoot: 'left' | 'right' = cyclePhase < 0.5 ? 'left' : 'right';
     const contactTolerance = baseUnitH * 0.08;
-    const leftWorldY = lFootNatural.y + currentBodyY;
-    const rightWorldY = rFootNatural.y + currentBodyY;
+    const leftWorldY = lFootTip.y + currentBodyY;
+    const rightWorldY = rFootTip.y + currentBodyY;
     const leftContactScore = clamp(1 - Math.abs(floorYGlobal - leftWorldY) / contactTolerance, 0, 1);
     const rightContactScore = clamp(1 - Math.abs(floorYGlobal - rightWorldY) / contactTolerance, 0, 1);
     const phaseSupportScore = 0.62 + (0.38 * Math.abs(Math.cos(cyclePhase * Math.PI * 2)));
@@ -90,25 +95,20 @@ export const applyFootGrounding = (
     const supportPinStrengthR = autoSupportFoot === 'right' ? autoSupportStrength : secondaryContactFoot === 'right' ? autoSecondaryStrength : 0.0;
     const effectivePinStrengthL = Math.max(pinStrengthL, supportPinStrengthL);
     const effectivePinStrengthR = Math.max(pinStrengthR, supportPinStrengthR);
+    const thighLengthL = (props.l_upper_leg?.h ?? 1) * ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_UPPER * baseUnitH;
+    const calfLengthL = (props.l_lower_leg?.h ?? 1) * ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_LOWER * baseUnitH;
+    const thighLengthR = (props.r_upper_leg?.h ?? 1) * ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_UPPER * baseUnitH;
+    const calfLengthR = (props.r_lower_leg?.h ?? 1) * ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_LOWER * baseUnitH;
+    const crouchFactor = clamp(Math.abs(currentBodyY) / (baseUnitH * 1.5), 0, 1);
+    const dynamicSpread = baseUnitH * lerp(GROUNDING_PHYSICS.STABILITY_SPRING_BASE_SPREAD_H_UNIT, GROUNDING_PHYSICS.STABILITY_SPRING_CROUCH_SPREAD_H_UNIT, crouchFactor);
 
     if (effectivePinStrengthL > 0.01 || effectivePinStrengthR > 0.01) {
-        const thighLengthL = (props.l_upper_leg?.h ?? 1) * ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_UPPER * baseUnitH;
-        const calfLengthL = (props.l_lower_leg?.h ?? 1) * ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_LOWER * baseUnitH;
-        const thighLengthR = (props.r_upper_leg?.h ?? 1) * ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_UPPER * baseUnitH;
-        const calfLengthR = (props.r_lower_leg?.h ?? 1) * ANATOMY_RAW_RELATIVE_TO_BASE_HEAD_UNIT.LEG_LOWER * baseUnitH;
-        
-        const maxLegReachL = thighLengthL + calfLengthL;
-        const maxLegReachR = thighLengthR + calfLengthR;
-
-        const crouchFactor = clamp(Math.abs(currentBodyY) / (baseUnitH * 1.5), 0, 1);
-        const dynamicSpread = baseUnitH * lerp(GROUNDING_PHYSICS.STABILITY_SPRING_BASE_SPREAD_H_UNIT, GROUNDING_PHYSICS.STABILITY_SPRING_CROUCH_SPREAD_H_UNIT, crouchFactor);
-
         let yCorrection = 0;
         let totalPinWeight = 0;
 
         const calculateYCorrection = (isRight: boolean, weight: number) => {
-            const reach = isRight ? maxLegReachR : maxLegReachL;
-            const footNatY = isRight ? rFootNatural.y : lFootNatural.y;
+            const reach = isRight ? (thighLengthR + calfLengthR) : (thighLengthL + calfLengthL);
+            const footTipY = isRight ? rFootTip.y : lFootTip.y;
             const supportWeight = isRight ? effectivePinStrengthR : effectivePinStrengthL;
             const supportOffsetX = autoSupportFoot
                 ? (autoSupportFoot === 'right' ? dynamicSpread * 0.35 : -dynamicSpread * 0.35)
@@ -126,7 +126,7 @@ export const applyFootGrounding = (
             const hipToTargetX = targetAnkleX - currentBodyX;
             const hipToTargetX_sq = hipToTargetX * hipToTargetX;
 
-            const transitionTargetY = lerp(footNatY + currentBodyY, floorYGlobal, supportWeight);
+            const transitionTargetY = lerp(footTipY + currentBodyY, floorYGlobal, supportWeight);
 
             if (hipToTargetX_sq > reach * reach) {
                 const xOffsetCorr = (Math.abs(hipToTargetX) - (reach * 0.99)) * Math.sign(hipToTargetX);
@@ -201,7 +201,7 @@ export const applyFootGrounding = (
             currentBodyY = lerp(currentBodyY, currentBodyY + correctionY, yCorrectionStrength);
         }
 
-        const betweenAnklesX = (lFootNatural.x + rFootNatural.x) * 0.5;
+        const betweenAnklesX = (lFootTip.x + rFootTip.x) * 0.5;
         const gravityBiasX = gravityCenter === 'left'
             ? -GROUNDING_PHYSICS.COG_X_SIDE_OFFSET_H_UNIT * baseUnitH
             : gravityCenter === 'right'
@@ -213,6 +213,48 @@ export const applyFootGrounding = (
         const idleXStability = (1 - locomotionWeight) * 0.1;
         currentBodyX = lerp(currentBodyX, supportCenterX, idleXStability + xCorrectionStrength * 0.5);
     }
+
+    const stanceProgressFor = (isRight: boolean) => {
+        const raw = isRight ? (cyclePhase - 0.5) * 2 : cyclePhase * 2;
+        return clamp(raw, 0, 1);
+    };
+
+    const buildChainMetrics = (isRight: boolean, supportWeight: number) => {
+        const stanceProgress = stanceProgressFor(isRight);
+        const hipAngle = isRight ? (adjustedPose.r_hip ?? 0) : (adjustedPose.l_hip ?? 0);
+        const kneeAngle = isRight ? (adjustedPose.r_knee ?? 0) : (adjustedPose.l_knee ?? 0);
+        const footAngle = isRight ? (adjustedPose.r_foot ?? -90) : (adjustedPose.l_foot ?? -90);
+        const footTip = isRight ? rFootTip : lFootTip;
+        const supportLoad = clamp(supportWeight * (0.4 + (isRight ? rightContactScore : leftContactScore) * 0.6), 0, 1);
+        const targetAnkleX = autoSupportFoot
+            ? (autoSupportFoot === 'right' ? dynamicSpread * 0.35 : -dynamicSpread * 0.35)
+            : 0;
+        const hipToFootDistance = Math.hypot(targetAnkleX - currentBodyX, floorYGlobal - (footTip.y + currentBodyY));
+        const reach = isRight ? (thighLengthR + calfLengthR) : (thighLengthL + calfLengthL);
+        const compression = clamp(1 - hipToFootDistance / reach, 0, 1);
+        const footPitch = footAngle + 90;
+        const ankleDrive = clamp(Math.abs(footPitch) / 55, 0, 1);
+        const heelSettle = clamp(footPitch / 32, 0, 1);
+        const toeDrive = clamp(-footPitch / 42, 0, 1);
+        const shinDrive = clamp(1 - kneeAngle / 110, 0, 1);
+        const thighDrive = clamp(1 - Math.abs(hipAngle) / 70, 0, 1);
+        const landingPhase = 1 - smooth01((stanceProgress - 0.16) / 0.26);
+        const pushOffPhase = smooth01((stanceProgress - 0.54) / 0.36);
+        const landing = supportLoad * landingPhase * (0.14 + compression * 0.24 + shinDrive * 0.18 + heelSettle * 0.14);
+        const pushOff = supportLoad * pushOffPhase * (0.16 + compression * 0.24 + ankleDrive * 0.18 + shinDrive * 0.18 + thighDrive * 0.12 + toeDrive * 0.16);
+        return { supportLoad, compression, ankleDrive, shinDrive, thighDrive, landing, pushOff };
+    };
+
+    const leftChain = buildChainMetrics(false, effectivePinStrengthL);
+    const rightChain = buildChainMetrics(true, effectivePinStrengthR);
+    const groundReaction = (leftChain.landing + rightChain.landing) - (leftChain.pushOff + rightChain.pushOff);
+    const groundBounce = clamp(
+        groundReaction * GROUNDING_PHYSICS.GROUND_BOUNCE_FACTOR,
+        -baseUnitH * 0.08,
+        baseUnitH * 0.05,
+    );
+    const bounceBlend = clamp((deltaTime / 48) * transitionSmoothing, GROUNDING_PHYSICS.GROUND_BOUNCE_RESPONSE, 0.5);
+    currentBodyY = lerp(currentBodyY, currentBodyY + groundBounce, bounceBlend);
     
     const totalTension = (tensions[PartName.LAnkle] || 0) + (tensions[PartName.RAnkle] || 0);
     if (totalTension > GROUNDING_PHYSICS.VERTICALITY_TENSION_THRESHOLD * ((pinStrengthL > 0.5 && pinStrengthR > 0.5) ? 2 : 1)) {
@@ -241,6 +283,12 @@ export const applyFootGrounding = (
         contactPose,
         leftContact: leftContactScore,
         rightContact: rightContactScore,
+        supportLoad: clamp(leftChain.supportLoad + rightChain.supportLoad, 0, 2),
+        groundBounce,
+        leftChain: leftChain.landing - leftChain.pushOff,
+        rightChain: rightChain.landing - rightChain.pushOff,
+        leftCompression: leftChain.compression,
+        rightCompression: rightChain.compression,
     } as const;
 
     return { adjustedPose, tensions, footState };
