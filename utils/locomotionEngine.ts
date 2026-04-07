@@ -137,6 +137,10 @@ const smooth01 = (t: number): number => {
   return x * x * (3 - 2 * x);
 };
 
+const shapePendulum = (value: number, power: number = 0.78): number => {
+  return Math.sign(value) * Math.pow(Math.abs(value), power);
+};
+
 const calculateLegAngles = (s: number, g: WalkingEngineGait, phase: number, wf: number) => {
   const verticality = clamp(g.verticality, 0, 1);
   const kickUp = clamp(g.kick_up_force, 0, 1);
@@ -145,6 +149,7 @@ const calculateLegAngles = (s: number, g: WalkingEngineGait, phase: number, wf: 
   const spring = clamp(g.footSpring, 0, 1);
   const footBend = clamp(g.feetAutoBend, 0, 1);
   const footStretch = clamp(g.feetAutoStretch, 0, 1);
+  const toeBend = clamp(g.toe_bend, 0, 1);
   const frequencyEnergy = clamp((g.frequency - 0.1) / 2.0, 0, 1);
   const motionEnergy = clamp(
     0.1
@@ -184,9 +189,11 @@ const calculateLegAngles = (s: number, g: WalkingEngineGait, phase: number, wf: 
     knee *= wf;
     knee = clamp(knee, 2, 28);
 
-    const strikeSettle = lerp(initialStrike, initialStrike * 0.35, midStance);
-    const toeRoll = lerp(0, GAIT_PHYSICS.STANCE_TOE_OFF_ANGLE, pushOff) * (g.foot_roll + kickUp * 0.25 + spring * 0.25);
-    foot += strikeSettle + toeRoll + stomp * 4 - drag * 8;
+    const strikeSettle = lerp(initialStrike - toeBend * 3.5, initialStrike * 0.42, midStance);
+    const toeRoll = lerp(0, GAIT_PHYSICS.STANCE_TOE_OFF_ANGLE, pushOff)
+      * (g.foot_roll + kickUp * 0.25 + spring * 0.25 + toeBend * 0.3);
+    const toeFlex = toeBend * GAIT_PHYSICS.TOE_BEND_MAX_ANGLE * (0.08 + release * 0.22);
+    foot += strikeSettle + toeRoll - toeFlex + stomp * 4 - drag * 6.5;
   } else {
     const lift = smooth01(cyclePhase / 0.18);
     const pass = smooth01((cyclePhase - 0.18) / 0.28);
@@ -206,10 +213,16 @@ const calculateLegAngles = (s: number, g: WalkingEngineGait, phase: number, wf: 
     knee += spring * 3.5 * swingCarry;
     knee = clamp(knee, 5, 44);
 
-    foot += kickUp * GAIT_PHYSICS.KICK_UP_FOOT_AMPLITUDE * swingCarry * (0.14 + lift * 0.26);
-    foot += footBend * GAIT_PHYSICS.FOOT_AUTO_BEND_MULTIPLIER * (0.16 + pass * 0.68);
-    foot -= footStretch * GAIT_PHYSICS.FOOT_AUTO_STRETCH_MULTIPLIER * reach;
-    foot += drag * GAIT_PHYSICS.FOOT_DRAG_MAX_ANGLE * (0.22 + pass * 0.58);
+    const swingLift = kickUp * GAIT_PHYSICS.KICK_UP_FOOT_AMPLITUDE * swingCarry * (0.16 + lift * 0.28);
+    const swingFlex = toeBend * GAIT_PHYSICS.TOE_BEND_MAX_ANGLE * (0.18 + lift * 0.42 + pass * 0.18);
+    const swingRelax = smooth01((cyclePhase - 0.72) / 0.22) * (toeBend * 6 + footStretch * 4);
+
+    foot += swingLift;
+    foot -= swingFlex;
+    foot += footBend * GAIT_PHYSICS.FOOT_AUTO_BEND_MULTIPLIER * (0.14 + pass * 0.58);
+    foot -= footStretch * GAIT_PHYSICS.FOOT_AUTO_STRETCH_MULTIPLIER * reach * (0.45 + pass * 0.55);
+    foot += drag * GAIT_PHYSICS.FOOT_DRAG_MAX_ANGLE * (0.16 + pass * 0.46);
+    foot += swingRelax;
   }
 
   return { hip, knee, foot };
@@ -306,6 +319,9 @@ export const updateLocomotionPhysics = (
     * (GAIT_PHYSICS.ARM_SWING_INTENSITY_BASE + g('intensity') * GAIT_PHYSICS.ARM_SWING_INTENSITY_FACTOR)
     * g('arm_swing')
     * motionEnergy;
+  const shoulderSwingEnvelope = clamp(0.74 + (g('frequency') * 0.22) + (g('arm_swing') * 0.16), 0.68, 1.28);
+  const shoulderArcL = shapePendulum(cStride);
+  const shoulderArcR = shapePendulum(sVal);
   
   const baseFlexion = lerp(GAIT_PHYSICS.ELBOW_WALK_BASE, GAIT_PHYSICS.ELBOW_RUN_BASE, clamp((g('intensity') - 0.4) * 1.5, 0, 1))
     * g('elbow_bend')
@@ -347,8 +363,8 @@ export const updateLocomotionPhysics = (
     torso: finalTorso,
     collar: finalCollar,
     neck: finalNeck,
-    l_shoulder: cStride * swingMag - g('arm_spread') * GAIT_PHYSICS.ARM_SPREAD_ANGLE,
-    r_shoulder: sVal * swingMag + g('arm_spread') * GAIT_PHYSICS.ARM_SPREAD_ANGLE,
+    l_shoulder: shoulderArcL * swingMag * shoulderSwingEnvelope - g('arm_spread') * GAIT_PHYSICS.ARM_SPREAD_ANGLE,
+    r_shoulder: shoulderArcR * swingMag * shoulderSwingEnvelope + g('arm_spread') * GAIT_PHYSICS.ARM_SPREAD_ANGLE,
     l_elbow: state.smoothedLElbow,
     r_elbow: state.smoothedRElbow,
     l_hand: lHand,

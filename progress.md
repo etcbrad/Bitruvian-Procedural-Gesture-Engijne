@@ -19,3 +19,8 @@ Original prompt: The knee bending needs to be refined to fit the average walking
 - Refined the lower-limb chain so the knee, shin, ankle, foot, and ground read as one connected action: foot-tip contact now uses the actual foot segment, stance loading/toe-off got smoother, and swing clearance is less abrupt.
 - Verified the latest preview build in the browser harness with no page errors; the current screenshot shows a more grounded step with the lower-leg and foot alignment reading more naturally.
 - Follow-up, if needed: tune stance toe-off vs swing clearance separately for `WALK`, `JOG`, and `RUN` so each mode reads more distinctly at a glance.
+- Current pass: `toe_bend` now feeds the leg solver so the foot can articulate through stance, swing clearance, and release instead of remaining a dead channel.
+- Current pass: shoulder swings now use a rounded pendulum curve with a stronger mode-aware envelope, and the text-state hook now reports both shoulder angles for verification.
+- Next check: visually confirm the new foot roll and shoulder arc feel smoother rather than merely larger, then trim the coefficients if the motion reads over-driven.
+- Verified in `output/web-game/foot-shoulder-pass-3`: foot articulation is more phase-aware, and shoulder swing now reaches a visibly larger arc in the state output (`armSwing` roughly `0.45`, shoulders around `±6.3` degrees).
+- Remaining tuning note: if the arms still read too tucked on some characters, bump `calculateArmSwing` a bit more or add a small elbow counter-swing; the current pass is balanced but still conservative on the screen.

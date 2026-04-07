@@ -36,6 +36,7 @@ const gaitSliderConfig: Partial<Record<keyof WalkingEngineGait, { min: number; m
   verticality: { min: 0, max: 1, step: 0.01, label: 'Step Magnitude', category: 'Legs' },
   kick_up_force: { min: 0, max: 1, step: 0.01, label: 'Posterior Extension', category: 'Legs' },
   foot_roll: { min: 0, max: 1, step: 0.01, label: 'Ankle Articulation', category: 'Legs' },
+  toe_bend: { min: 0, max: 1, step: 0.01, label: 'Toe Bend', category: 'Legs' },
   heavyStomp: { min: 0, max: 1, step: 0.01, label: 'Impact Density', category: 'Effects' },
   footDrag: { min: 0, max: 1, step: 0.01, label: 'Frictional Drag', category: 'Effects' },
 };
@@ -379,6 +380,8 @@ const App: React.FC = () => {
         torso: pose.torso,
         collar: pose.collar,
         neck: pose.neck,
+        lShoulder: pose.l_shoulder,
+        rShoulder: pose.r_shoulder,
         lHip: pose.l_hip,
         rHip: pose.r_hip,
         lKnee: pose.l_knee,
@@ -395,6 +398,7 @@ const App: React.FC = () => {
         lean: gait.lean,
         verticality: gait.verticality,
         armSwing: gait.arm_swing,
+        toeBend: gait.toe_bend,
         footDrag: gait.footDrag,
       },
       idle: {

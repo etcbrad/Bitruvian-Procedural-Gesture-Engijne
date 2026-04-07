@@ -14,6 +14,7 @@ const MODE_ENVELOPES: Record<GaitMode, Partial<Record<keyof WalkingEngineGait, G
     gravity: { mul: 1.06, min: 0.18, max: 1.1 },
     kick_up_force: { mul: 0.88, min: 0, max: 1.05 },
     foot_roll: { mul: 1.04, min: 0.12, max: 1.1 },
+    toe_bend: { mul: 1.08, min: 0.16, max: 1.1 },
     hip_sway: { mul: 0.82, min: 0.05, max: 1.9 },
     elbow_bend: { mul: 0.9, min: 0, max: 1.65 },
     torso_swivel: { mul: 0.84, min: 0, max: 1.15 },
@@ -28,6 +29,7 @@ const MODE_ENVELOPES: Record<GaitMode, Partial<Record<keyof WalkingEngineGait, G
     gravity: { mul: 1.0, min: 0.15, max: 1.0 },
     kick_up_force: { mul: 0.98, min: 0, max: 1.15 },
     foot_roll: { mul: 1.0, min: 0.1, max: 1.15 },
+    toe_bend: { mul: 1.0, min: 0.12, max: 1.15 },
     hip_sway: { mul: 0.98, min: 0.05, max: 2.0 },
     elbow_bend: { mul: 0.98, min: 0, max: 1.85 },
     torso_swivel: { mul: 0.98, min: 0, max: 1.25 },
@@ -42,6 +44,7 @@ const MODE_ENVELOPES: Record<GaitMode, Partial<Record<keyof WalkingEngineGait, G
     gravity: { mul: 0.9, min: 0.1, max: 0.95 },
     kick_up_force: { mul: 1.08, min: 0, max: 1.25 },
     foot_roll: { mul: 1.06, min: 0.08, max: 1.2 },
+    toe_bend: { mul: 0.92, min: 0.08, max: 1.05 },
     hip_sway: { mul: 1.04, min: 0.05, max: 2.35 },
     elbow_bend: { mul: 1.04, min: 0, max: 2 },
     torso_swivel: { mul: 1.04, min: 0, max: 1.5 },
@@ -200,7 +203,7 @@ export class GaitSynthesizer {
     return g.bodyRoll.base * 1.0 * (1 - g.stability * 0.5);
   }
   private static calculateArmSwing(g: GaitGenome): number {
-    return Math.min(2, g.shoulderSwing.base * (1 + g.stride.base * 0.4) * (1 - g.weight * 0.4));
+    return Math.min(2.4, g.shoulderSwing.base * (2.55 + g.stride.base * 0.9) * (1 - g.weight * 0.24));
   }
   private static calculateElbowBend(g: GaitGenome): number {
     return g.shoulderSwing.base * (1.2 + g.confidence * 0.3);
