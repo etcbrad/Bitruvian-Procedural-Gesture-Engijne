@@ -76,6 +76,8 @@ export interface LocomotionState {
   smoothedWaistSway: number;
   smoothedBodySwayX: number;
   smoothedBobbing: number;
+  smoothedLFoot: number;
+  smoothedRFoot: number;
   smoothedLKnee: number;
   smoothedRKnee: number;
   smoothedLElbow: number;
@@ -92,6 +94,8 @@ export const INITIAL_LOCOMOTION_STATE: LocomotionState = {
   smoothedWaistSway: 0,
   smoothedBodySwayX: 0,
   smoothedBobbing: 0,
+  smoothedLFoot: -90,
+  smoothedRFoot: -90,
   smoothedLKnee: 0,
   smoothedRKnee: 0,
   smoothedLElbow: 0,
@@ -191,12 +195,13 @@ const calculateLegAngles = (s: number, g: WalkingEngineGait, phase: number, wf: 
 
     const strikeSettle = lerp(initialStrike - toeBend * 3.5, initialStrike * 0.42, midStance);
     const toeRoll = lerp(0, GAIT_PHYSICS.STANCE_TOE_OFF_ANGLE, pushOff)
-      * (g.foot_roll + kickUp * 0.25 + spring * 0.25 + toeBend * 0.3);
+      * (g.foot_roll * 0.82 + kickUp * 0.2 + spring * 0.2 + toeBend * 0.2);
     const toeFlex = toeBend * GAIT_PHYSICS.TOE_BEND_MAX_ANGLE * (0.08 + release * 0.22);
-    foot += strikeSettle + toeRoll - toeFlex + stomp * 4 - drag * 6.5;
+    const pushOffRoll = smooth01((cyclePhase - 0.44) / 0.18) * (4 + kickUp * 3 + spring * 2 + drag * 2);
+    foot += strikeSettle + (toeRoll * 0.48) - toeFlex + stomp * 2.1 - drag * 1.8 + pushOffRoll;
   } else {
     const lift = smooth01(cyclePhase / 0.18);
-    const pass = smooth01((cyclePhase - 0.18) / 0.28);
+    const pass = smooth01((cyclePhase - 0.16) / 0.3);
     const reach = smooth01((cyclePhase - 0.58) / 0.32);
     const airFactor = clamp(GAIT_PHYSICS.HOVER_AIR_FACTOR_BASE - (g.gravity * 0.6) + (verticality * 0.35) + (spring * 0.15), 0.15, 1.8);
     const swingCarry = clamp(0.25 + frequencyEnergy * 0.85, 0.25, 1);
@@ -213,19 +218,25 @@ const calculateLegAngles = (s: number, g: WalkingEngineGait, phase: number, wf: 
     knee += spring * 3.5 * swingCarry;
     knee = clamp(knee, 5, 44);
 
-    const swingLift = kickUp * GAIT_PHYSICS.KICK_UP_FOOT_AMPLITUDE * swingCarry * (0.16 + lift * 0.28);
-    const swingFlex = toeBend * GAIT_PHYSICS.TOE_BEND_MAX_ANGLE * (0.18 + lift * 0.42 + pass * 0.18);
-    const swingRelax = smooth01((cyclePhase - 0.72) / 0.22) * (toeBend * 6 + footStretch * 4);
+    const swingLift = kickUp * GAIT_PHYSICS.KICK_UP_FOOT_AMPLITUDE * swingCarry * (0.1 + lift * 0.18);
+    const swingFlex = toeBend * GAIT_PHYSICS.TOE_BEND_MAX_ANGLE * (0.08 + lift * 0.22 + pass * 0.06);
+    const swingRelax = smooth01((cyclePhase - 0.68) / 0.24) * (toeBend * 3 + footStretch * 2.5);
+    const swingSettle = smooth01((cyclePhase - 0.16) / 0.34) * (8 + drag * 3 + footStretch * 2.5);
 
     foot += swingLift;
     foot -= swingFlex;
-    foot += footBend * GAIT_PHYSICS.FOOT_AUTO_BEND_MULTIPLIER * (0.14 + pass * 0.58);
-    foot -= footStretch * GAIT_PHYSICS.FOOT_AUTO_STRETCH_MULTIPLIER * reach * (0.45 + pass * 0.55);
-    foot += drag * GAIT_PHYSICS.FOOT_DRAG_MAX_ANGLE * (0.16 + pass * 0.46);
-    foot += swingRelax;
+    foot += footBend * GAIT_PHYSICS.FOOT_AUTO_BEND_MULTIPLIER * (0.1 + pass * 0.42);
+    foot -= footStretch * GAIT_PHYSICS.FOOT_AUTO_STRETCH_MULTIPLIER * reach * (0.2 + pass * 0.22);
+    foot += drag * GAIT_PHYSICS.FOOT_DRAG_MAX_ANGLE * (0.04 + pass * 0.12);
+    foot += swingRelax * 0.35;
+    foot += swingSettle;
   }
 
-  return { hip, knee, foot };
+  return {
+    hip,
+    knee,
+    foot: clamp(foot, -106, -64),
+  };
 };
 
 const calculateHandAngle = (
@@ -346,6 +357,9 @@ export const updateLocomotionPhysics = (
 
   const lLeg = calculateLegAngles(sVal, gait, p, weightFactor);
   const rLeg = calculateLegAngles(cStride, gait, p + Math.PI, weightFactor);
+  const footAlpha = clamp(alpha * 1.4 + 0.08, 0, 1);
+  state.smoothedLFoot = lerp(state.smoothedLFoot, lLeg.foot, footAlpha);
+  state.smoothedRFoot = lerp(state.smoothedRFoot, rLeg.foot, footAlpha);
 
   const tTwist = -state.smoothedWaistTwist * (GAIT_PHYSICS.TORSO_COUNTER_TWIST_BASE + g('torso_swivel') * GAIT_PHYSICS.TORSO_COUNTER_TWIST_SWIVEL_RANGE);
   const finalTorso = state.smoothedTorsoLean + tTwist + state.smoothedWaistSway + (upperBodyLean * 8);
@@ -369,7 +383,7 @@ export const updateLocomotionPhysics = (
     r_elbow: state.smoothedRElbow,
     l_hand: lHand,
     r_hand: rHand,
-    l_hip: lLeg.hip, l_knee: lLeg.knee, l_foot: lLeg.foot,
-    r_hip: rLeg.hip, r_knee: rLeg.knee, r_foot: rLeg.foot,
+    l_hip: lLeg.hip, l_knee: lLeg.knee, l_foot: state.smoothedLFoot,
+    r_hip: rLeg.hip, r_knee: rLeg.knee, r_foot: state.smoothedRFoot,
   };
 };

@@ -3,7 +3,7 @@ import JSZip from 'jszip';
 import { GIFEncoder, applyPalette, quantize } from 'gifenc';
 import { Mannequin } from '../components/Mannequin';
 import { DEFAULT_LOTTE_SETTINGS, DEFAULT_PROPORTIONS, MANNEQUIN_LOCAL_FLOOR_Y } from '../constants';
-import { IdleSettings, LotteSettings, WalkingEngineGait, WalkingEnginePivotOffsets, WalkingEnginePose } from '../types';
+import { IdleSettings, LotteSettings, WalkKeyPoseSet, WalkingEngineGait, WalkingEnginePivotOffsets, WalkingEnginePose } from '../types';
 
 export type AnimatedExportFormat = 'gif' | 'webm';
 
@@ -16,6 +16,8 @@ export type ExportLoopContext = {
   activePins: string[];
   pivotOffsets: WalkingEnginePivotOffsets;
   gravityCenter: 'left' | 'center' | 'right';
+  keyPoseMode: boolean;
+  keyPoseSet: WalkKeyPoseSet;
   lotteSettings?: LotteSettings;
 };
 
@@ -227,6 +229,8 @@ const exportSamplesAsPngZip = async (
         fps: samples.length / (makeLoopDurationMs(context.gait) / 1000),
         gravityCenter: context.gravityCenter,
         gait: context.gait,
+        keyPoseMode: context.keyPoseMode,
+        keyPoseSet: context.keyPoseSet,
       },
       null,
       2,
@@ -254,6 +258,8 @@ const exportKeyframesJson = async (
     gravityCenter: context.gravityCenter,
     gait: context.gait,
     idleSettings: context.idleSettings,
+    keyPoseMode: context.keyPoseMode,
+    keyPoseSet: context.keyPoseSet,
     keyframes,
   };
 
@@ -301,6 +307,8 @@ const exportKeyframesZip = async (
         gravityCenter: context.gravityCenter,
         gait: context.gait,
         idleSettings: context.idleSettings,
+        keyPoseMode: context.keyPoseMode,
+        keyPoseSet: context.keyPoseSet,
         keyframes,
         imageScale: previewScale,
       },
@@ -318,6 +326,8 @@ const exportKeyframesZip = async (
         frameCount: keyframes.length,
         gravityCenter: context.gravityCenter,
         gait: context.gait,
+        keyPoseMode: context.keyPoseMode,
+        keyPoseSet: context.keyPoseSet,
         includes: ['keyframes.json', 'frames/*.png'],
         imageScale: previewScale,
       },

@@ -47,7 +47,7 @@ export type GhostState = {
   opacity: number;
 };
 
-export type GaitMode = 'walk' | 'jog' | 'run';
+export type GaitMode = 'poser' | 'walk' | 'jog' | 'run' | 'chaos';
 
 export type WalkingEngineGait = {
   intensity: number;
@@ -215,6 +215,36 @@ export enum PartName {
 }
 
 export type EasingType = 'linear' | 'easeInOutQuint' | 'easeInQuad' | 'easeOutQuad' | 'easeInOutCubic';
+
+export type WalkKeyPoseId = 'contact' | 'down' | 'passing' | 'up';
+
+export type WalkKeyPoseAnchor = {
+  id: WalkKeyPoseId;
+  phase: number;
+  easing: EasingType;
+  mirror: boolean;
+  authored: boolean;
+  pose: WalkingEnginePose;
+};
+
+export type WalkKeyPoseSet = {
+  selectedAnchorId: WalkKeyPoseId;
+  anchors: Record<WalkKeyPoseId, WalkKeyPoseAnchor>;
+};
+
+export type PoseLibraryCategory = 'Base' | 'Action' | 'Dance' | 'Still' | 'Character';
+
+export type PoseLibraryEntry = {
+  id: string;
+  cat: PoseLibraryCategory;
+  name: string;
+  src: string;
+  data: string;
+  pose: WalkingEnginePose;
+  phaseHint: number;
+  mirrored?: boolean;
+  sourceId?: string;
+};
 
 export type Keyframe = {
   time: number;

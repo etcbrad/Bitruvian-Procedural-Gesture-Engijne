@@ -14,6 +14,8 @@ export interface BoneProps {
   children?: React.ReactNode;
   drawsUpwards?: boolean;
   colorClass?: string;
+  showLabel?: boolean;
+  label?: string;
   boneKey?: keyof WalkingEnginePivotOffsets;
   proportionKey?: keyof WalkingEngineProportions;
   onAnchorMouseDown?: (boneKey: keyof WalkingEnginePivotOffsets, clientX: number) => void;
@@ -26,6 +28,8 @@ export interface BoneProps {
   tension?: number; 
   isCutoutMode?: boolean; 
   opacity?: number;
+  showPlusButton?: boolean;
+  onPlusClick?: () => void;
 }
 
 export const COLORS = {
@@ -55,7 +59,30 @@ const resolveColor = (colorClass?: string): string | undefined => {
 };
 
 export const Bone: React.FC<BoneProps> = ({
-  length, width = 15, variant = 'diamond', showPivots = true, visible = true, offset = { x: 0, y: 0 }, children, drawsUpwards = false, colorClass = "fill-mono-dark", boneKey, onAnchorMouseDown, isBeingDragged = false, isPausedAndPivotsVisible = false, patternFillId, isPinned = false, isBendActive = false, isStretchActive = false, tension = 0, isCutoutMode = false, opacity = 1
+  length,
+  width = 15,
+  variant = 'diamond',
+  showPivots = true,
+  visible = true,
+  offset = { x: 0, y: 0 },
+  children,
+  drawsUpwards = false,
+  colorClass = "fill-mono-dark",
+  boneKey,
+  onAnchorMouseDown,
+  isBeingDragged = false,
+  isPausedAndPivotsVisible = false,
+  patternFillId,
+  isPinned = false,
+  isBendActive = false,
+  isStretchActive = false,
+  tension = 0,
+  isCutoutMode = false,
+  opacity = 1,
+  showLabel = false,
+  label,
+  showPlusButton = false,
+  onPlusClick,
 }) => {
   const effectiveDrawLength = isCutoutMode ? Math.max(0, length - CUTOUT_GAP_SIZE * 2) : length;
   const visualEndPoint = drawsUpwards ? -effectiveDrawLength : effectiveDrawLength;
@@ -70,6 +97,7 @@ export const Bone: React.FC<BoneProps> = ({
       case 'torso-teardrop-pointy-down': return `M ${hw*0.4},0 C ${hw*0.4},${-boneLength*0.3} ${hw},${-boneLength*0.7} ${hw},${-boneLength} L ${-hw},${-boneLength} C ${-hw},${-boneLength*0.7} ${-hw*0.4},${-boneLength*0.3} ${-hw*0.4},0 Z`;
       case 'deltoid-shape': return `M ${hw} 0 C ${hw} ${boneLength*0.2} ${hw*1.2} ${boneLength*0.4} ${hw*1.2} ${boneLength*0.7} L 0 ${boneLength} L ${-hw*1.2} ${boneLength*0.7} C ${-hw*1.2} ${boneLength*0.4} ${-hw} ${boneLength*0.2} ${-hw} 0 Z`;
       case 'limb-tapered': return `M ${hw},0 L ${hw*0.6},${effLen} L ${-hw*0.6},${effLen} L ${-hw},0 Z`;
+      case 'foot-block-shape': return `M ${hw},0 L ${hw*0.75},${effLen} L ${-hw*0.75},${effLen} L ${-hw},0 Z`;
       case 'hand-foot-arrowhead-shape': return `M ${-hw*0.3},0 L ${hw*0.3},0 L 0,${effLen} Z`;
       case 'toe-triangle': return `M ${-hw},0 L ${hw},0 L 0,${effLen} Z`;
       default: return `M 0 0 L ${hw} ${effLen*0.4} L 0 ${effLen} L ${-hw} ${effLen*0.4} Z`;
@@ -96,6 +124,16 @@ export const Bone: React.FC<BoneProps> = ({
             style={{ cursor: isPausedAndPivotsVisible ? 'pointer' : 'default' }}
         />
       )}
+      {visible && showLabel && label && (
+        <text
+          x={width / 2 + 6}
+          y={visualEndPoint / 2}
+          className="fill-mono-mid text-[7px] font-mono select-none opacity-50 tracking-tight uppercase pointer-events-none"
+          dominantBaseline="middle"
+        >
+          {label}
+        </text>
+      )}
       {children}
       {showPivots && visible && boneKey && (
         <g>
@@ -110,10 +148,17 @@ export const Bone: React.FC<BoneProps> = ({
             onMouseDown={(e) => isPausedAndPivotsVisible && onAnchorMouseDown && onAnchorMouseDown(boneKey, e.clientX)}
           />
           {isPinned && (
-              <circle cx="0" cy="0" r={10 * anchorScale} fill="none" stroke={COLORS.PIN_HIGHLIGHT} strokeWidth="1.5" strokeDasharray="3 3">
+            <circle cx="0" cy="0" r={10 * anchorScale} fill="none" stroke={COLORS.PIN_HIGHLIGHT} strokeWidth="1.5" strokeDasharray="3 3">
                   <animateTransform attributeName="transform" type="rotate" from="0 0 0" to="360 0 0" dur="4s" repeatCount="indefinite" />
               </circle>
           )}
+        </g>
+      )}
+      {visible && showPlusButton && onPlusClick && (
+        <g className="cursor-pointer group" onClick={onPlusClick}>
+          <circle cx={0} cy={visualEndPoint / 2} r="12" fill="rgba(255,255,255,0.72)" className="group-hover:fill-white transition-colors" />
+          <line x1={-6} y1={visualEndPoint / 2} x2={6} y2={visualEndPoint / 2} stroke="#333" strokeWidth="2" strokeLinecap="round" className="group-hover:stroke-black transition-colors" />
+          <line x1={0} y1={visualEndPoint / 2 - 6} x2={0} y2={visualEndPoint / 2 + 6} stroke="#333" strokeWidth="2" strokeLinecap="round" className="group-hover:stroke-black transition-colors" />
         </g>
       )}
     </g>
