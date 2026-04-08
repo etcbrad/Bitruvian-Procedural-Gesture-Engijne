@@ -1,5 +1,5 @@
 {
-  "name": "bitruvian-motion-emulator",
+  "name": "proceduralwalkingengine",
   "compatibility_date": "2026-04-08",
   "assets": {
     "directory": "./dist"
