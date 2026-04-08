@@ -110,6 +110,6 @@ export class CharacterGenerator {
     const w = { light: 'Swift', normal: '', heavy: 'Ponderous', massive: 'Colossal' };
     const prefix = s[e.size as keyof typeof s] || '';
     const weightPrefix = w[e.weight as keyof typeof w] || '';
-    return `${prefix} ${weightPrefix} Walker`.trim() || "Bitruvian Subject";
+    return `${prefix} ${weightPrefix} Walker`.trim() || "Bitruvius Subject";
   }
 }

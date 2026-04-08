@@ -47,7 +47,7 @@ export type GhostState = {
   opacity: number;
 };
 
-export type GaitMode = 'poser' | 'walk' | 'jog' | 'run' | 'chaos';
+export type GaitMode = 'idle' | 'walk' | 'jog' | 'run';
 
 export type WalkingEngineGait = {
   intensity: number;
@@ -193,7 +193,9 @@ export type WalkingEnginePivotOffsets = {
   l_foot: number; r_foot: number;
 };
 
-export type JointModesState = Partial<Record<keyof WalkingEnginePivotOffsets, { isBend: boolean; isStretch: boolean }>>;
+export type JointMode = 'fk' | 'bend' | 'stretch';
+
+export type JointModesState = Partial<Record<keyof WalkingEnginePivotOffsets, JointMode>>;
 
 export enum PartName {
   Waist = 'waist',
@@ -215,50 +217,6 @@ export enum PartName {
 }
 
 export type EasingType = 'linear' | 'easeInOutQuint' | 'easeInQuad' | 'easeOutQuad' | 'easeInOutCubic';
-
-export type WalkKeyPoseId = 'contact' | 'down' | 'passing' | 'up';
-
-export type WalkKeyPoseCycleBeat = {
-  id: string;
-  label: string;
-  phase: number;
-};
-
-export type WalkKeyPoseCycleSeed = {
-  source: 'generated-cycle';
-  sampledAtPhase: number;
-  helperBeats: WalkKeyPoseCycleBeat[];
-};
-
-export type WalkKeyPoseAnchor = {
-  id: WalkKeyPoseId;
-  phase: number;
-  easing: EasingType;
-  mirror: boolean;
-  authored: boolean;
-  pose: WalkingEnginePose;
-  cyclePose: WalkingEnginePose;
-};
-
-export type WalkKeyPoseSet = {
-  selectedAnchorId: WalkKeyPoseId;
-  anchors: Record<WalkKeyPoseId, WalkKeyPoseAnchor>;
-  cycleSeed: WalkKeyPoseCycleSeed;
-};
-
-export type PoseLibraryCategory = 'Base' | 'Action' | 'Dance' | 'Still' | 'Character';
-
-export type PoseLibraryEntry = {
-  id: string;
-  cat: PoseLibraryCategory;
-  name: string;
-  src: string;
-  data: string;
-  pose: WalkingEnginePose;
-  phaseHint: number;
-  mirrored?: boolean;
-  sourceId?: string;
-};
 
 export type Keyframe = {
   time: number;

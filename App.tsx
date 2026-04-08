@@ -14,36 +14,26 @@ import {
 import { applyGaitModeEnvelope, normalizeGaitModeEnvelope } from './utils/gaitSynthesis';
 import { lerp, clamp } from './utils/kinematics';
 import { exportAnimatedLoop, exportKeyframes, exportLoopFrames, type AnimatedExportFormat } from './utils/animationExport';
-import { POSE_LIBRARY_BY_ID, POSE_LIBRARY_CATEGORIES, POSE_LIBRARY_DB } from './utils/poseLibraryDb';
-import { poseToString, stringToPose } from './utils/poseParser';
-import {
-  applyCompiledWalkKeyPoseOverlay,
-  captureWalkKeyPoseAnchor,
-  compileWalkKeyPoseSet,
-  createNeutralWalkKeyPoseSetFromGait,
-  findNearestWalkKeyPoseId,
-  mirrorWalkingPose,
-  resetWalkKeyPoseAnchor,
-  resampleWalkKeyPoseSetFromCycle,
-  setWalkKeyPoseEasing,
-  setWalkKeyPoseMirror,
-  setWalkKeyPosePhase,
-  syncNeutralWalkKeyPoseSetToGait,
-  WALK_KEY_POSE_EASING_OPTIONS,
-  WALK_KEY_POSE_IDS,
-} from './utils/walkKeyPoses';
 import { useMannequinStore } from './store';
 import {
-  EasingType,
   GaitMode,
   IdleSettings,
-  PoseLibraryEntry,
-  WalkKeyPoseId,
-  WalkKeyPoseSet,
+  JointModesState,
   WalkingEngineGait,
   WalkingEnginePivotOffsets,
   WalkingEnginePose,
 } from './types';
+import {
+  applyJointCascade,
+  formatJointLabel,
+  JOINT_KEYS,
+  POSE_BODY_ROTATION_MAX,
+  POSE_BODY_ROTATION_MIN,
+  POSE_DRAG_SENSITIVITY,
+  POSE_JOINT_SLIDER_MAX,
+  POSE_JOINT_SLIDER_MIN,
+  toggleJointMode,
+} from './utils/poserAuthoring';
 
 const DEFAULT_BASE_UNIT_H = 150;
 const STAGE_VIEW_BOX = UI.BASE_VIEWBOX;
@@ -51,9 +41,9 @@ const STAGE_VIEW_BOX_STRING = `${STAGE_VIEW_BOX.x} ${STAGE_VIEW_BOX.y} ${STAGE_V
 const STAGE_GROUND_Y = UI.BASE_VIEWBOX.y + UI.BASE_VIEWBOX.height - 4;
 const STAGE_GRID_SIZE = 120;
 
-type ShellMode = 'runtime' | 'editor';
-type MotionMode = 'locomotion' | 'idle';
+type ShellMode = 'runtime';
 type StrideEntryStyle = 'tiptoe' | 'neutral' | 'drive';
+type WorkspaceMode = 'motion' | 'poser';
 
 const gaitSliderConfig: Partial<Record<keyof WalkingEngineGait, { min: number; max: number; step: number; label: string; category: string }>> = {
   intensity: { min: 0, max: 2, step: 0.01, label: 'Kinetic Intensity', category: 'Primary' },
@@ -83,11 +73,13 @@ const strideEntryOptions: { style: StrideEntryStyle; label: string; note: string
   { style: 'drive', label: 'DRIVE', note: 'push-off' },
 ];
 
+const ANIMATED_EXPORT_FPS_OPTIONS = [6, 12, 15, 24, 30, 60] as const;
+
 const gaitModeOptions: { mode: GaitMode; label: string; note: string }[] = [
   {
-    mode: 'poser',
-    label: 'POSER',
-    note: 'static full fk',
+    mode: 'idle',
+    label: 'IDLE',
+    note: 'planted stance',
   },
   {
     mode: 'walk',
@@ -104,19 +96,13 @@ const gaitModeOptions: { mode: GaitMode; label: string; note: string }[] = [
     label: 'RUN',
     note: 'extended stride band',
   },
-  {
-    mode: 'chaos',
-    label: 'CHAOS',
-    note: 'unbounded gait chaos',
-  },
 ];
 
 const STRIDE_BANDS: Record<GaitMode, { uiMin: number; uiMax: number; actualMin: number; actualMax: number }> = {
-  poser: { uiMin: 0, uiMax: 100, actualMin: 0, actualMax: 2 },
+  idle: { uiMin: 0, uiMax: 50, actualMin: 0.12, actualMax: 0.65 },
   walk: { uiMin: 0, uiMax: 50, actualMin: 0.12, actualMax: 0.65 },
   jog: { uiMin: 50, uiMax: 75, actualMin: 0.65, actualMax: 1.22 },
   run: { uiMin: 75, uiMax: 100, actualMin: 1.22, actualMax: 1.95 },
-  chaos: { uiMin: 0, uiMax: 100, actualMin: 0, actualMax: 2.5 },
 };
 
 type GaitAdjustment = { mul?: number; add?: number; min?: number; max?: number };
@@ -144,9 +130,7 @@ const gaitKeyGroups: Record<'core' | 'advanced', (keyof WalkingEngineGait)[]> = 
   advanced: advancedGaitKeys,
 };
 
-const normalizePhase = (phase: number): number => ((phase % 1) + 1) % 1;
 const phaseToPercent = (phase: number): number => Math.round(normalizePhase(phase) * 100);
-
 const applyGaitAdjustments = (gait: WalkingEngineGait, adjustments: Partial<Record<keyof WalkingEngineGait, GaitAdjustment>>): WalkingEngineGait => {
   const next = { ...gait };
   (Object.keys(adjustments) as (keyof WalkingEngineGait)[]).forEach((key) => {
@@ -183,6 +167,8 @@ const mapStrideValueToPercent = (mode: GaitMode, value: number) => {
   const normalized = clamp((value - band.actualMin) / (band.actualMax - band.actualMin), 0, 1);
   return lerp(band.uiMin, band.uiMax, normalized);
 };
+
+const normalizePhase = (phase: number): number => ((phase % 1) + 1) % 1;
 
 const Section: React.FC<{
   title: string;
@@ -282,24 +268,27 @@ const App: React.FC = () => {
     setPose,
     setGait,
     setIdleSettings,
+    setPivotOffsets,
     setActivePins,
     setGravityCenter,
   } = useMannequinStore();
 
-  const [shellMode, setShellMode] = useState<ShellMode>('runtime');
-  const [motionMode, setMotionMode] = useState<MotionMode>('locomotion');
+  const shellMode: ShellMode = 'runtime';
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('motion');
   const [showPivots, setShowPivots] = useState(true);
   const [showLabels, setShowLabels] = useState(false);
   const [showConsole, setShowConsole] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [poserMotionEnabled, setPoserMotionEnabled] = useState(true);
   const [targetFps, setTargetFps] = useState(TIMING.DEFAULT_TARGET_FPS);
   const [exportFormat, setExportFormat] = useState<AnimatedExportFormat>('gif');
+  const [animatedExportFps, setAnimatedExportFps] = useState<number>(24);
+  const [showAnimatedExportPicker, setShowAnimatedExportPicker] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [pendingExport, setPendingExport] = useState<{ mode: 'frames' | 'keyframes' | 'animated' } | null>(null);
-  const [selectedLibraryId, setSelectedLibraryId] = useState(POSE_LIBRARY_DB[0]?.id ?? '');
-  const [walkKeyPoseSet, setWalkKeyPoseSet] = useState<WalkKeyPoseSet>(() => createNeutralWalkKeyPoseSetFromGait(gait, physics));
-  const [keyPoseEditorPlaying, setKeyPoseEditorPlaying] = useState(true);
-  const [keyPosePreviewPhase, setKeyPosePreviewPhase] = useState(pose.stride_phase ?? 0);
+  const [poserBodyRotation, setPoserBodyRotation] = useState(0);
+  const [jointModes, setJointModes] = useState<JointModesState>({});
+  const [draggingBoneKey, setDraggingBoneKey] = useState<keyof WalkingEnginePivotOffsets | null>(null);
   const [tensions, setTensions] = useState<Record<string, number>>({});
   const [groundingState, setGroundingState] = useState<{
     weightBearingFoot: 'left' | 'right' | 'both';
@@ -318,28 +307,22 @@ const App: React.FC = () => {
   const [zoomIndex, setZoomIndex] = useState(UI.DEFAULT_ZOOM_INDEX);
 
   const activePinsList = Array.isArray(activePins) ? activePins : [];
-  const keyPoseMode = shellMode === 'editor';
-  const displayLabels = showLabels || keyPoseMode;
-  const displayPivots = showPivots || keyPoseMode;
-  const selectedAnchor = walkKeyPoseSet.anchors[walkKeyPoseSet.selectedAnchorId];
-  const selectedLibraryEntry = useMemo(() => POSE_LIBRARY_BY_ID[selectedLibraryId] ?? POSE_LIBRARY_DB[0], [selectedLibraryId]);
-  const selectedLibraryPose = useMemo(() => stringToPose(selectedLibraryEntry.data), [selectedLibraryEntry]);
-  const selectedLibraryPoseString = useMemo(() => poseToString(selectedLibraryPose), [selectedLibraryPose]);
-  const selectedAnchorPoseString = useMemo(() => poseToString(selectedAnchor.pose), [selectedAnchor]);
-  const selectedAnchorCyclePoseString = useMemo(() => poseToString(selectedAnchor.cyclePose), [selectedAnchor]);
-  const selectedLibraryGroups = useMemo(() => POSE_LIBRARY_CATEGORIES.map((category) => ({
-    category,
-    entries: POSE_LIBRARY_DB.filter((entry) => entry.cat === category),
-  })), []);
+  const displayLabels = showLabels;
+  const displayPivots = showPivots;
   const exportFps = Math.min(24, targetFps);
+  const displayedPose = useMemo<WalkingEnginePose>(() => ({
+    ...pose,
+    bodyRotation: (pose.bodyRotation ?? 0) + poserBodyRotation,
+  }), [pose, poserBodyRotation]);
 
   const zoom = UI.ZOOM_LEVELS[zoomIndex];
   const zoomedViewBox = useMemo(() => {
     const z = zoom;
     const newWidth = STAGE_VIEW_BOX.width / z;
     const newHeight = STAGE_VIEW_BOX.height / z;
+    const stageBottomY = STAGE_VIEW_BOX.y + STAGE_VIEW_BOX.height;
     const newX = STAGE_VIEW_BOX.x - (newWidth - STAGE_VIEW_BOX.width) / 2;
-    const newY = STAGE_VIEW_BOX.y - (newHeight - STAGE_VIEW_BOX.height) / 2;
+    const newY = stageBottomY - newHeight;
     return { x: newX, y: newY, width: newWidth, height: newHeight };
   }, [zoom]);
 
@@ -350,33 +333,14 @@ const App: React.FC = () => {
   const strideEntryStyleRef = useRef<StrideEntryStyle>('tiptoe');
   const gaitBaseRef = useRef<WalkingEngineGait>(normalizeGaitModeEnvelope(gait, gaitModeRef.current));
   const isPausedRef = useRef(isPaused);
-  const poseRef = useRef<WalkingEnginePose>(pose);
-  const livePhaseRef = useRef(pose.stride_phase ?? 0);
-  const keyPoseEditorPlayingRef = useRef(keyPoseEditorPlaying);
-  const keyPosePreviewPhaseRef = useRef(keyPosePreviewPhase);
-  const keyPoseSnapshotPoseRef = useRef<WalkingEnginePose>({ ...pose });
-  const keyPoseSnapshotPhaseRef = useRef(pose.stride_phase ?? 0);
   const exportLockRef = useRef(false);
+  const poserShowPivotsBeforeRef = useRef(showPivots);
+  const dragStartXRef = useRef(0);
+  const dragStartValueRef = useRef(0);
 
   useEffect(() => {
     isPausedRef.current = isPaused;
   }, [isPaused]);
-
-  useEffect(() => {
-    poseRef.current = pose;
-  }, [pose]);
-
-  useEffect(() => {
-    keyPoseEditorPlayingRef.current = keyPoseEditorPlaying;
-  }, [keyPoseEditorPlaying]);
-
-  useEffect(() => {
-    keyPosePreviewPhaseRef.current = keyPosePreviewPhase;
-  }, [keyPosePreviewPhase]);
-
-  useEffect(() => {
-    setWalkKeyPoseSet((prev) => syncNeutralWalkKeyPoseSetToGait(prev, gait, physics));
-  }, [gait, physics]);
 
   const logSystem = useCallback((message: string) => {
     setSystemLogs((prev) => [...prev.slice(-23), { timestamp: new Date().toLocaleTimeString(), message }]);
@@ -389,76 +353,10 @@ const App: React.FC = () => {
     return grounded.adjustedPose as WalkingEnginePose;
   }, [activePinsList, gait, gravityCenter, idleSettings, physics, proportions]);
 
-  const primeEditorAtPhase = useCallback((phase: number) => {
-    const normalizedPhase = normalizePhase(phase);
-    keyPoseSnapshotPoseRef.current = { ...poseRef.current };
-    keyPoseSnapshotPhaseRef.current = normalizedPhase;
-    setShellMode('editor');
-    setKeyPoseEditorPlaying(false);
-    setKeyPosePreviewPhase(normalizedPhase);
-    setWalkKeyPoseSet((prev) => ({
-      ...prev,
-      selectedAnchorId: findNearestWalkKeyPoseId(normalizedPhase, prev.anchors),
-    }));
-  }, []);
-
-  const enterEditorAtPhase = useCallback((phase: number) => {
-    const normalizedPhase = normalizePhase(phase);
-    primeEditorAtPhase(normalizedPhase);
-    setWalkKeyPoseSet((prev) => resampleWalkKeyPoseSetFromCycle(prev, generateBasePoseAtPhase, normalizedPhase));
-    logSystem(`Shell: editor @ ${phaseToPercent(normalizedPhase)}%`);
-  }, [generateBasePoseAtPhase, logSystem, primeEditorAtPhase]);
-
-  const exitEditor = useCallback(() => {
-    setShellMode('runtime');
-    setKeyPoseEditorPlaying(false);
-    logSystem('Shell: runtime');
-  }, [logSystem]);
-
-  const toggleEditorPlayback = useCallback(() => {
-    if (!keyPoseMode) return;
-
-    if (keyPoseEditorPlayingRef.current) {
-      keyPoseSnapshotPoseRef.current = { ...poseRef.current };
-      keyPoseSnapshotPhaseRef.current = keyPosePreviewPhaseRef.current;
-      setKeyPoseEditorPlaying(false);
-      logSystem('Editor: frozen scrub');
-      return;
-    }
-
-    const currentPhase = livePhaseRef.current ?? poseRef.current.stride_phase ?? 0;
-    setKeyPosePreviewPhase(currentPhase);
-    setKeyPoseEditorPlaying(true);
-    logSystem('Editor: live follow');
-  }, [keyPoseMode, logSystem]);
-
-  const applyLibraryEntry = useCallback((entry: PoseLibraryEntry, anchorOverride?: WalkKeyPoseId) => {
-    const phase = normalizePhase(entry.phaseHint);
-    const poseFromLibrary = stringToPose(entry.data);
-
-    primeEditorAtPhase(phase);
-    setSelectedLibraryId(entry.id);
-    setWalkKeyPoseSet((prev) => {
-      const targetAnchorId = anchorOverride ?? findNearestWalkKeyPoseId(phase, prev.anchors);
-      const cyclePose = entry.mirrored ? mirrorWalkingPose(generateBasePoseAtPhase(phase)) : generateBasePoseAtPhase(phase);
-      return {
-        ...prev,
-        selectedAnchorId: targetAnchorId,
-        anchors: {
-          ...prev.anchors,
-          [targetAnchorId]: {
-            ...prev.anchors[targetAnchorId],
-            phase,
-            mirror: Boolean(entry.mirrored),
-            authored: true,
-            pose: { ...poseFromLibrary, stride_phase: phase },
-            cyclePose,
-          },
-        },
-      };
-    });
-    logSystem(`Library seed: ${entry.id} ${entry.name}`);
-  }, [generateBasePoseAtPhase, logSystem, primeEditorAtPhase]);
+  const generateIdlePoseAtPhase = useCallback((phase: number) => {
+    const syntheticTime = phase * 10_000;
+    return updateIdlePhysics(syntheticTime, 16, idleSettings, 0, [], true) as WalkingEnginePose;
+  }, [idleSettings]);
 
   const applyDisplayedGaitFromBase = useCallback((nextBase: WalkingEngineGait) => {
     gaitBaseRef.current = nextBase;
@@ -495,54 +393,80 @@ const App: React.FC = () => {
     applyDisplayedGaitFromBase(gaitBaseRef.current);
   }, [applyDisplayedGaitFromBase]);
 
-  const compiledKeyPoseSet = useMemo(() => (
-    compileWalkKeyPoseSet(walkKeyPoseSet, generateBasePoseAtPhase)
-  ), [generateBasePoseAtPhase, walkKeyPoseSet]);
+  const toggleWorkspaceMode = useCallback(() => {
+    setWorkspaceMode((prev) => {
+      if (prev === 'poser') {
+        setShowPivots(poserShowPivotsBeforeRef.current);
+        setDraggingBoneKey(null);
+        logSystem('Workspace: MOTION');
+        return 'motion';
+      }
 
-  const toggleAnchorPin = useCallback((boneKey: keyof WalkingEnginePivotOffsets) => {
-    setActivePins((prev) => {
-      const next = prev.includes(boneKey) ? prev.filter((key) => key !== boneKey) : [...prev, boneKey];
-      logSystem(`Pin: ${boneKey.toUpperCase()} ${next.includes(boneKey) ? 'ON' : 'OFF'}`);
-      return next;
+      poserShowPivotsBeforeRef.current = showPivots;
+      setShowPivots(true);
+      logSystem('Workspace: POSER');
+      return 'poser';
     });
-  }, [logSystem, setActivePins]);
+  }, [logSystem, showPivots]);
 
-  const handleAnchorMouseDown = useCallback((boneKey: keyof WalkingEnginePivotOffsets) => {
-    if (!isPaused || !displayPivots) return;
-    toggleAnchorPin(boneKey);
-  }, [displayPivots, isPaused, toggleAnchorPin]);
+  const handleJointModeChange = useCallback((key: keyof WalkingEnginePivotOffsets, mode: 'bend' | 'stretch') => {
+    setJointModes((prev) => toggleJointMode(prev, key, mode));
+    logSystem(`Joint mode: ${formatJointLabel(key)} → ${mode.toUpperCase()}`);
+  }, [logSystem]);
 
-  const captureSelectedAnchor = useCallback(() => {
-    const anchorId = walkKeyPoseSet.selectedAnchorId;
-    setWalkKeyPoseSet((prev) => captureWalkKeyPoseAnchor(prev, anchorId, poseRef.current, livePhaseRef.current, generateBasePoseAtPhase));
-    logSystem(`Capture: ${anchorId.toUpperCase()}`);
-  }, [generateBasePoseAtPhase, logSystem, walkKeyPoseSet.selectedAnchorId]);
+  const handlePoserPivotChange = useCallback((key: keyof WalkingEnginePivotOffsets, nextValue: number) => {
+    setPivotOffsets((prev) => applyJointCascade(prev, key, nextValue, jointModes));
+  }, [jointModes, setPivotOffsets]);
 
-  const resetSelectedAnchor = useCallback(() => {
-    const anchorId = walkKeyPoseSet.selectedAnchorId;
-    setWalkKeyPoseSet((prev) => resetWalkKeyPoseAnchor(prev, anchorId, generateBasePoseAtPhase));
-    logSystem(`Reset anchor: ${anchorId.toUpperCase()}`);
-  }, [generateBasePoseAtPhase, logSystem, walkKeyPoseSet.selectedAnchorId]);
+  const handleBoneMouseDown = useCallback((boneKey: keyof WalkingEnginePivotOffsets, clientX: number, event: React.MouseEvent) => {
+    const canEditBones = workspaceMode === 'poser' || (isPaused && showPivots);
+    if (!canEditBones) return;
 
-  const resetWalkKeyPoseSet = useCallback(() => {
-    setWalkKeyPoseSet((prev) => {
-      const next = createNeutralWalkKeyPoseSetFromGait(gait, physics, livePhaseRef.current ?? pose.stride_phase ?? 0);
-      return { ...next, selectedAnchorId: prev.selectedAnchorId };
-    });
-    logSystem('Key pose set reset');
-  }, [gait, logSystem, physics, pose.stride_phase]);
+    event.preventDefault();
+    event.stopPropagation();
 
-  const toggleSelectedAnchorMirror = useCallback(() => {
-    const anchorId = walkKeyPoseSet.selectedAnchorId;
-    const nextMirror = !selectedAnchor.mirror;
-    setWalkKeyPoseSet((prev) => setWalkKeyPoseMirror(prev, anchorId, nextMirror));
-    logSystem(`Mirror: ${anchorId.toUpperCase()} ${nextMirror ? 'ON' : 'OFF'}`);
-  }, [logSystem, selectedAnchor.mirror, walkKeyPoseSet.selectedAnchorId]);
+    if (event.shiftKey) {
+      setActivePins((prev) => {
+        const next = prev.includes(boneKey) ? prev.filter((key) => key !== boneKey) : [...prev, boneKey];
+        logSystem(`Pin: ${boneKey.toUpperCase()} ${next.includes(boneKey) ? 'ON' : 'OFF'}`);
+        return next;
+      });
+      return;
+    }
 
-  const applySelectedLibraryToSelectedAnchor = useCallback(() => {
-    if (!selectedLibraryEntry) return;
-    applyLibraryEntry(selectedLibraryEntry, walkKeyPoseSet.selectedAnchorId);
-  }, [applyLibraryEntry, selectedLibraryEntry, walkKeyPoseSet.selectedAnchorId]);
+    setDraggingBoneKey(boneKey);
+    dragStartXRef.current = clientX;
+    dragStartValueRef.current = pivotOffsets[boneKey];
+  }, [isPaused, logSystem, pivotOffsets, setActivePins, showPivots, workspaceMode]);
+
+  const handleGlobalBoneMouseMove = useCallback((event: MouseEvent) => {
+    if (!draggingBoneKey) return;
+
+    const deltaX = event.clientX - dragStartXRef.current;
+    const nextValue = clamp(
+      dragStartValueRef.current + (deltaX * POSE_DRAG_SENSITIVITY),
+      POSE_JOINT_SLIDER_MIN,
+      POSE_JOINT_SLIDER_MAX,
+    );
+
+    setPivotOffsets((prev) => applyJointCascade(prev, draggingBoneKey, nextValue, jointModes));
+  }, [draggingBoneKey, jointModes, setPivotOffsets]);
+
+  const handleGlobalBoneMouseUp = useCallback(() => {
+    setDraggingBoneKey(null);
+  }, []);
+
+  useEffect(() => {
+    if (!draggingBoneKey) return;
+
+    window.addEventListener('mousemove', handleGlobalBoneMouseMove);
+    window.addEventListener('mouseup', handleGlobalBoneMouseUp);
+
+    return () => {
+      window.removeEventListener('mousemove', handleGlobalBoneMouseMove);
+      window.removeEventListener('mouseup', handleGlobalBoneMouseUp);
+    };
+  }, [draggingBoneKey, handleGlobalBoneMouseMove, handleGlobalBoneMouseUp]);
 
   const handlePauseToggle = useCallback(() => {
     setIsPaused((prev) => !prev);
@@ -551,59 +475,23 @@ const App: React.FC = () => {
   useEffect(() => {
     let frame = 0;
 
-    const animate = (time: number) => {
-      frame = window.requestAnimationFrame(animate);
-
-      if (isPausedRef.current) {
-        lastFrameTimeRef.current = time;
-        return;
-      }
-
-      const elapsed = time - lastFrameTimeRef.current;
-      if (elapsed < 1000 / targetFps) return;
-      lastFrameTimeRef.current = time;
-
-      const targetWeight = motionMode === 'locomotion' ? 1.0 : 0.0;
+    const applyFrame = (time: number, elapsed: number) => {
+      const isIdleMode = gaitModeRef.current === 'idle';
+      const targetWeight = isIdleMode ? 0.0 : 1.0;
       locomotionWeightRef.current = lerp(locomotionWeightRef.current, targetWeight, 0.08);
       const locWeight = locomotionWeightRef.current;
 
-      const isStaticPoser = gaitModeRef.current === 'poser';
-      const p = isStaticPoser ? 0 : (time * 0.005 * gait.frequency) % (Math.PI * 2);
-      const locPoseBase = isStaticPoser
-        ? generateBasePoseAtPhase(keyPosePreviewPhaseRef.current)
-        : updateLocomotionPhysics(p, locomotionStateRef.current, gait, physics, locWeight);
-      const locPhase = isStaticPoser
-        ? keyPosePreviewPhaseRef.current
-        : locPoseBase.stride_phase ?? (((p / (Math.PI * 2)) % 1) + 1) % 1;
-      livePhaseRef.current = locPhase;
-
-      if (keyPoseMode && keyPoseEditorPlayingRef.current) {
-        if (Math.abs(keyPosePreviewPhaseRef.current - locPhase) > 0.0001) {
-          keyPosePreviewPhaseRef.current = locPhase;
-          setKeyPosePreviewPhase(locPhase);
-        }
-        const livePose = applyCompiledWalkKeyPoseOverlay(locPoseBase as WalkingEnginePose, locPhase, compiledKeyPoseSet);
-        const grounded = applyFootGrounding(livePose, proportions, DEFAULT_BASE_UNIT_H, physics, activePinsList, idleSettings, gravityCenter, locWeight, elapsed);
+      if (isIdleMode) {
+        const idlePose = updateIdlePhysics(time, elapsed, idleSettings, 0, [], true);
+        const grounded = applyFootGrounding(idlePose, proportions, DEFAULT_BASE_UNIT_H, physics, activePinsList, idleSettings, gravityCenter, 0, elapsed);
         setTensions(grounded.tensions);
         setGroundingState(grounded.footState ?? null);
         setPose(grounded.adjustedPose as WalkingEnginePose);
         return;
       }
 
-      if (keyPoseMode) {
-        const frozenPhase = keyPosePreviewPhaseRef.current;
-        const snapshotPhase = keyPoseSnapshotPhaseRef.current;
-        const frozenBasePose = Math.abs(frozenPhase - snapshotPhase) < 0.0001
-          ? keyPoseSnapshotPoseRef.current
-          : generateBasePoseAtPhase(frozenPhase);
-        const frozenPose = applyCompiledWalkKeyPoseOverlay(frozenBasePose as WalkingEnginePose, frozenPhase, compiledKeyPoseSet);
-        const grounded = applyFootGrounding(frozenPose, proportions, DEFAULT_BASE_UNIT_H, physics, activePinsList, idleSettings, gravityCenter, locWeight, elapsed);
-        setTensions(grounded.tensions);
-        setGroundingState(grounded.footState ?? null);
-        setPose(grounded.adjustedPose as WalkingEnginePose);
-        return;
-      }
-
+      const p = (time * 0.005 * gait.frequency) % (Math.PI * 2);
+      const locPoseBase = updateLocomotionPhysics(p, locomotionStateRef.current, gait, physics, locWeight);
       const idlePose = updateIdlePhysics(time, elapsed, idleSettings, locWeight, []);
       const blendedPose = BehaviorEngine.blendPose(locPoseBase, idlePose, {}, locWeight, gait, time);
       const grounded = applyFootGrounding(blendedPose, proportions, DEFAULT_BASE_UNIT_H, physics, activePinsList, idleSettings, gravityCenter, locWeight, elapsed);
@@ -612,27 +500,60 @@ const App: React.FC = () => {
       setPose(grounded.adjustedPose as WalkingEnginePose);
     };
 
+    const animate = (time: number) => {
+      frame = window.requestAnimationFrame(animate);
+
+      if (isPausedRef.current || (workspaceMode === 'poser' && !poserMotionEnabled)) {
+        lastFrameTimeRef.current = time;
+        return;
+      }
+
+      const elapsed = time - lastFrameTimeRef.current;
+      if (elapsed < 1000 / targetFps) return;
+      lastFrameTimeRef.current = time;
+
+      applyFrame(time, elapsed);
+    };
+
+    const advanceTime = (ms: number) => {
+      const steps = Math.max(1, Math.round(ms / (1000 / 60)));
+      const stepMs = ms / steps;
+      let syntheticTime = lastFrameTimeRef.current;
+
+      for (let i = 0; i < steps; i += 1) {
+        syntheticTime += stepMs;
+        lastFrameTimeRef.current = syntheticTime;
+        applyFrame(syntheticTime, stepMs);
+      }
+    };
+
+    const windowTarget = window as Window & { advanceTime?: (ms: number) => void };
+    windowTarget.advanceTime = advanceTime;
+
     frame = window.requestAnimationFrame(animate);
-    return () => window.cancelAnimationFrame(frame);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (windowTarget.advanceTime === advanceTime) delete windowTarget.advanceTime;
+    };
   }, [
     activePinsList,
-    compiledKeyPoseSet,
-    generateBasePoseAtPhase,
     gait,
     gravityCenter,
     idleSettings,
-    keyPoseMode,
-    motionMode,
     physics,
     proportions,
+    poserMotionEnabled,
     setPose,
     targetFps,
+    workspaceMode,
   ]);
 
   useEffect(() => {
     const renderGameToText = () => JSON.stringify({
       shellMode,
-      motionMode,
+      workspaceMode,
+      motionMode: gaitModeRef.current === 'idle' ? 'idle' : 'locomotion',
+      gaitMode: gaitModeRef.current,
       paused: isPaused,
       showLabels,
       showPivots,
@@ -640,26 +561,33 @@ const App: React.FC = () => {
       targetFps,
       exportFormat,
       pose: {
-        bodyRotation: pose.bodyRotation,
-        waist: pose.waist,
-        torso: pose.torso,
-        collar: pose.collar,
-        neck: pose.neck,
-        lShoulder: pose.l_shoulder,
-        rShoulder: pose.r_shoulder,
-        lElbow: pose.l_elbow,
-        rElbow: pose.r_elbow,
-        lHand: pose.l_hand,
-        rHand: pose.r_hand,
-        lHip: pose.l_hip,
-        rHip: pose.r_hip,
-        lKnee: pose.l_knee,
-        rKnee: pose.r_knee,
-        lFoot: pose.l_foot,
-        rFoot: pose.r_foot,
-        xOffset: pose.x_offset,
-        yOffset: pose.y_offset,
-        stridePhase: pose.stride_phase,
+        bodyRotation: displayedPose.bodyRotation,
+        waist: displayedPose.waist,
+        torso: displayedPose.torso,
+        collar: displayedPose.collar,
+        neck: displayedPose.neck,
+        lShoulder: displayedPose.l_shoulder,
+        rShoulder: displayedPose.r_shoulder,
+        lElbow: displayedPose.l_elbow,
+        rElbow: displayedPose.r_elbow,
+        lHand: displayedPose.l_hand,
+        rHand: displayedPose.r_hand,
+        lHip: displayedPose.l_hip,
+        rHip: displayedPose.r_hip,
+        lKnee: displayedPose.l_knee,
+        rKnee: displayedPose.r_knee,
+        lFoot: displayedPose.l_foot,
+        rFoot: displayedPose.r_foot,
+        xOffset: displayedPose.x_offset,
+        yOffset: displayedPose.y_offset,
+        stridePhase: displayedPose.stride_phase,
+      },
+      poser: {
+        active: workspaceMode === 'poser',
+        bodyRotationOffset: poserBodyRotation,
+        draggingBoneKey,
+        jointModes,
+        pivotOffsets,
       },
       gait: {
         mode: gaitModeRef.current,
@@ -686,30 +614,6 @@ const App: React.FC = () => {
         gravityCenter,
         activePins: activePinsList,
       },
-      selectedLibrary: selectedLibraryEntry ? {
-        id: selectedLibraryEntry.id,
-        name: selectedLibraryEntry.name,
-        cat: selectedLibraryEntry.cat,
-        phaseHint: selectedLibraryEntry.phaseHint,
-        mirrored: Boolean(selectedLibraryEntry.mirrored),
-        data: selectedLibraryPoseString,
-      } : null,
-      keyPose: {
-        active: keyPoseMode,
-        playing: keyPoseEditorPlaying,
-        previewPhase: keyPosePreviewPhase,
-        selectedAnchorId: walkKeyPoseSet.selectedAnchorId,
-        cycleSeed: walkKeyPoseSet.cycleSeed,
-        selectedAnchor: {
-          phase: selectedAnchor.phase,
-          easing: selectedAnchor.easing,
-          mirror: selectedAnchor.mirror,
-          authored: selectedAnchor.authored,
-          data: selectedAnchorPoseString,
-          cycleData: selectedAnchorCyclePoseString,
-        },
-        keyPoseSet: walkKeyPoseSet,
-      },
       grounding: groundingState,
       logs: systemLogs.slice(-5),
       exporting: {
@@ -731,28 +635,20 @@ const App: React.FC = () => {
     idleSettings,
     isExporting,
     isPaused,
-    keyPoseEditorPlaying,
-    keyPoseMode,
-    keyPosePreviewPhase,
-    motionMode,
     pendingExport?.mode,
     pose,
-    selectedAnchor.authored,
-    selectedAnchor.easing,
-    selectedAnchor.mirror,
-    selectedAnchor.phase,
-    selectedAnchorPoseString,
-    selectedAnchorCyclePoseString,
-    selectedLibraryEntry,
-    selectedLibraryPoseString,
     shellMode,
     showConsole,
     showLabels,
     showPivots,
     systemLogs,
     targetFps,
-    walkKeyPoseSet,
     gait,
+    displayedPose,
+    workspaceMode,
+    poserBodyRotation,
+    draggingBoneKey,
+    jointModes,
   ]);
 
   const buildExportContext = useCallback(() => ({
@@ -764,25 +660,35 @@ const App: React.FC = () => {
     activePins: activePinsList,
     pivotOffsets,
     gravityCenter,
-    keyPoseMode,
-    keyPoseSet: walkKeyPoseSet,
     lotteSettings,
+    workspaceMode,
+    poserBodyRotation,
+    jointModes,
   }), [
     activePinsList,
     gait,
     gravityCenter,
     idleSettings,
-    keyPoseMode,
     lotteSettings,
     pivotOffsets,
-    walkKeyPoseSet,
+    workspaceMode,
+    poserBodyRotation,
+    jointModes,
   ]);
 
   const generatePoseAtPhase = useCallback((phase: number) => {
-    const basePose = generateBasePoseAtPhase(phase);
-    if (!keyPoseMode) return basePose;
-    return applyCompiledWalkKeyPoseOverlay(basePose, phase, compiledKeyPoseSet);
-  }, [compiledKeyPoseSet, generateBasePoseAtPhase, keyPoseMode]);
+    return gaitModeRef.current === 'idle'
+      ? generateIdlePoseAtPhase(phase)
+      : generateBasePoseAtPhase(phase);
+  }, [generateBasePoseAtPhase, generateIdlePoseAtPhase]);
+
+  const generatePosedPoseAtPhase = useCallback((phase: number) => {
+    const basePose = generatePoseAtPhase(phase);
+    return {
+      ...basePose,
+      bodyRotation: (basePose.bodyRotation ?? 0) + poserBodyRotation,
+    };
+  }, [generatePoseAtPhase, poserBodyRotation]);
 
   const requestExport = useCallback((mode: 'frames' | 'keyframes' | 'animated') => {
     if (exportLockRef.current || isExporting || pendingExport) return;
@@ -803,19 +709,18 @@ const App: React.FC = () => {
       }
 
       try {
-        if (pendingExport.mode === 'frames') {
+      if (pendingExport.mode === 'frames') {
           logSystem('Export: loop frames zip');
-          await exportLoopFrames(context, generatePoseAtPhase, exportFps);
+          await exportLoopFrames(context, generatePosedPoseAtPhase, exportFps);
           if (!cancelled) logSystem('Export complete: frames zip');
         } else if (pendingExport.mode === 'keyframes') {
           logSystem('Export: keyframes zip');
-          await exportKeyframes(context, generatePoseAtPhase);
+          await exportKeyframes(context, generatePosedPoseAtPhase);
           if (!cancelled) logSystem('Export complete: keyframes zip');
         } else {
           logSystem(`Export: animated ${exportFormat.toUpperCase()}`);
-          const animatedExportFps = exportFormat === 'gif' ? Math.min(6, exportFps) : Math.min(12, exportFps);
           const animatedExportScale = exportFormat === 'gif' ? 0.45 : 0.7;
-          await exportAnimatedLoop(context, generatePoseAtPhase, animatedExportFps, exportFormat, animatedExportScale);
+          await exportAnimatedLoop(context, generatePosedPoseAtPhase, animatedExportFps, exportFormat, animatedExportScale);
           if (!cancelled) logSystem(`Export complete: animated ${exportFormat.toUpperCase()}`);
         }
       } catch (error) {
@@ -839,22 +744,101 @@ const App: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [buildExportContext, exportFormat, exportFps, generatePoseAtPhase, pendingExport]);
-
-  const selectedAnchorPhaseValue = phaseToPercent(selectedAnchor.phase);
-  const cyclePreviewValue = phaseToPercent(keyPosePreviewPhase);
-  const playbackButtonLabel = keyPoseEditorPlaying ? 'PAUSE' : 'PLAY';
-  const keyPoseModeButtonLabel = keyPoseMode ? 'Deactivate Key Pose Mode' : 'Activate Key Pose Mode';
+  }, [animatedExportFps, buildExportContext, exportFormat, generatePosedPoseAtPhase, pendingExport]);
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-shell text-ink xl:flex-row">
-      <aside className="flex w-full min-w-0 flex-col border-b border-ridge bg-white/90 shadow-2xl backdrop-blur xl:w-[24rem] xl:border-b-0 xl:border-r">
+      <main
+        className="relative order-1 min-h-[56svh] min-w-0 flex-[0_0_auto] overflow-hidden xl:order-2 xl:min-h-0 xl:flex-1"
+        style={{
+          backgroundImage: 'radial-gradient(circle at top, rgba(17, 24, 39, 0.08), transparent 38%), linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%)',
+        }}
+      >
+        <svg
+          className="absolute inset-0 h-full w-full"
+          viewBox={`${zoomedViewBox.x} ${zoomedViewBox.y} ${zoomedViewBox.width} ${zoomedViewBox.height}`}
+          preserveAspectRatio="xMidYMid meet"
+          role="img"
+          aria-label="Bitruvius mannequin stage"
+        >
+          <defs>
+            <pattern id="stage-grid" width={STAGE_GRID_SIZE} height={STAGE_GRID_SIZE} patternUnits="userSpaceOnUse">
+              <path d={`M ${STAGE_GRID_SIZE} 0 L 0 0 0 ${STAGE_GRID_SIZE}`} fill="none" stroke="rgba(17, 24, 39, 0.08)" strokeWidth="1" />
+            </pattern>
+          </defs>
+
+          <rect x={zoomedViewBox.x} y={zoomedViewBox.y} width={zoomedViewBox.width} height={zoomedViewBox.height} fill="url(#stage-grid)" opacity="0.65" />
+          <AdvancedGrid origin={{ x: 0, y: 0 }} gridSize={STAGE_GRID_SIZE} viewBox={zoomedViewBox} />
+          <SystemGuides floorY={STAGE_GROUND_Y} baseUnitH={DEFAULT_BASE_UNIT_H} />
+
+          <g transform={`translate(${pose.x_offset}, ${STAGE_GROUND_Y - (MANNEQUIN_LOCAL_FLOOR_Y * DEFAULT_BASE_UNIT_H) + pose.y_offset})`}>
+            <Mannequin
+              pose={displayedPose}
+              bodyRotation={displayedPose.bodyRotation ?? 0}
+              pivotOffsets={pivotOffsets}
+              props={proportions}
+              showPivots={displayPivots}
+              showLabels={displayLabels}
+              baseUnitH={DEFAULT_BASE_UNIT_H}
+              onAnchorMouseDown={handleBoneMouseDown}
+              onBodyMouseDown={handleBoneMouseDown}
+              draggingBoneKey={draggingBoneKey}
+              isPaused={isPaused}
+              poserActive={workspaceMode === 'poser'}
+              activePins={activePinsList}
+              tensions={tensions}
+              jointModes={jointModes}
+              lotteSettings={lotteSettings}
+              isExploded={false}
+            />
+          </g>
+        </svg>
+
+        <Scanlines />
+
+        <div className="pointer-events-none absolute left-4 top-4 z-20 flex flex-col gap-2">
+          <div className="rounded-full border border-ridge bg-white/85 px-3 py-1.5 text-[7px] font-black uppercase tracking-[0.26em] text-mono-mid shadow-sm backdrop-blur">
+            {shellMode.toUpperCase()} · {workspaceMode.toUpperCase()} · {gaitModeRef.current.toUpperCase()} · {isPaused ? 'PAUSED' : 'LIVE'}
+          </div>
+          <div className="rounded border border-ridge bg-white/85 px-3 py-1.5 text-[7px] font-black uppercase tracking-[0.24em] text-mono-mid shadow-sm backdrop-blur">
+            gait {gaitModeRef.current.toUpperCase()} · phase {phaseToPercent(displayedPose.stride_phase ?? 0)}% · pins {activePinsList.length}
+          </div>
+        </div>
+
+        <div className="pointer-events-none absolute right-4 top-4 z-20 flex flex-col items-end gap-2">
+          <div className="rounded border border-ridge bg-white/85 px-3 py-1.5 text-right text-[7px] font-black uppercase tracking-[0.24em] text-mono-mid shadow-sm backdrop-blur">
+            {displayLabels ? 'labels on' : 'labels off'} · {displayPivots ? 'pivots on' : 'pivots off'}
+          </div>
+        </div>
+
+        <div className="pointer-events-auto absolute bottom-4 right-4 z-20 flex flex-col gap-1">
+          <button
+            type="button"
+            onClick={() => setZoomIndex(i => Math.min(UI.ZOOM_LEVELS.length - 1, i + 1))}
+            className="rounded border border-ridge bg-white/90 px-2 py-1 text-[8px] font-black uppercase tracking-[0.24em] text-ink hover:bg-shell shadow-sm backdrop-blur"
+          >
+            ZOOM +
+          </button>
+          <div className="rounded border border-ridge bg-white/90 px-2 py-1 text-center text-[7px] font-black uppercase tracking-[0.24em] text-mono-mid shadow-sm backdrop-blur">
+            {zoom.toFixed(2)}x
+          </div>
+          <button
+            type="button"
+            onClick={() => setZoomIndex(i => Math.max(0, i - 1))}
+            className="rounded border border-ridge bg-white/90 px-2 py-1 text-[8px] font-black uppercase tracking-[0.24em] text-ink hover:bg-shell shadow-sm backdrop-blur"
+          >
+            ZOOM -
+          </button>
+        </div>
+      </main>
+
+      <aside className="order-2 flex max-h-[44svh] w-full min-w-0 flex-col overflow-hidden border-t border-ridge bg-white/90 shadow-2xl backdrop-blur xl:order-1 xl:h-full xl:max-h-none xl:w-[24rem] xl:border-t-0 xl:border-r">
         <div className="border-b border-ridge px-4 py-4">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="font-archaic text-4xl uppercase tracking-[0.28em] text-ink">Bitruvian</div>
+              <div className="font-archaic text-4xl uppercase tracking-[0.28em] text-ink">Bitruvius</div>
               <div className="mt-1 text-[8px] font-black uppercase tracking-[0.28em] text-mono-light">
-                lean shell / current physics / live pose library
+                The Bitruvian Posyng Puppyt.
               </div>
             </div>
             <div className="rounded border border-ridge bg-shell px-2 py-1 text-[7px] font-black uppercase tracking-[0.22em] text-mono-mid">
@@ -863,22 +847,13 @@ const App: React.FC = () => {
           </div>
 
           <div className="mt-3 flex flex-wrap gap-2">
-            <ToggleChip active={shellMode === 'runtime'} onClick={exitEditor}>
+            <div className="rounded-full border border-ridge bg-white px-3 py-1.5 text-[8px] font-black uppercase tracking-[0.24em] text-ink">
               Runtime
-            </ToggleChip>
-            <ToggleChip active={shellMode === 'editor'} onClick={() => enterEditorAtPhase(livePhaseRef.current ?? pose.stride_phase ?? 0)}>
-              {keyPoseModeButtonLabel}
-            </ToggleChip>
-            <ToggleChip active={motionMode === 'locomotion'} onClick={() => setMotionMode('locomotion')}>
-              Locomotion
-            </ToggleChip>
-            <ToggleChip active={motionMode === 'idle'} onClick={() => setMotionMode('idle')}>
-              Idle
-            </ToggleChip>
+            </div>
             <ToggleChip active={isPaused} onClick={handlePauseToggle}>
               {isPaused ? 'Running' : 'Pause'}
             </ToggleChip>
-            <ToggleChip active={displayPivots} onClick={() => setShowPivots((prev) => !prev)}>
+            <ToggleChip active={displayPivots} onClick={() => setShowPivots((prev) => !prev)} disabled={workspaceMode === 'poser'} title={workspaceMode === 'poser' ? 'Poser forces pivots visible' : 'Toggle joint pivots'}>
               Pivots
             </ToggleChip>
             <ToggleChip active={displayLabels} onClick={() => setShowLabels((prev) => !prev)}>
@@ -891,17 +866,38 @@ const App: React.FC = () => {
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 custom-scrollbar">
-          <Section title="Motion" count={gaitKeyGroups.core.length + gaitKeyGroups.advanced.length + gaitModeOptions.length + strideEntryOptions.length} defaultOpen>
-            <div className="space-y-4">
+          <Section title="Shared" count={gaitModeOptions.length + 2} defaultOpen>
+            <div className="space-y-3">
+              <ToggleChip
+                active={poserMotionEnabled}
+                onClick={() => setPoserMotionEnabled((prev) => !prev)}
+              >
+                {poserMotionEnabled ? 'Motion On' : 'Motion Off'}
+              </ToggleChip>
+
               <div className="rounded border border-ridge bg-shell px-3 py-2">
-                <div className="text-[7px] font-black uppercase tracking-[0.26em] text-mono-light">Motion Mode</div>
-                <div className="text-[8px] font-black uppercase tracking-[0.2em] text-selection">{gaitModeRef.current.toUpperCase()}</div>
+                <div className="text-[7px] font-black uppercase tracking-[0.26em] text-mono-light">Workspace / Balance</div>
+                <div className="text-[8px] font-black uppercase tracking-[0.2em] text-selection">
+                  {workspaceMode.toUpperCase()} · {gaitModeRef.current.toUpperCase()}
+                </div>
                 <div className="mt-1 text-[7px] font-black uppercase tracking-[0.22em] text-mono-light">
-                  Use the top bar to switch between locomotion and idle.
+                  Shared controls work across gait motion and the live poser overlay.
                 </div>
               </div>
 
               <div className="grid grid-cols-5 gap-1.5">
+                <button
+                  type="button"
+                  onClick={toggleWorkspaceMode}
+                  className={`rounded border px-2 py-2 text-left transition-all ${
+                    workspaceMode === 'poser' ? 'border-selection bg-selection text-white shadow-md' : 'border-ridge bg-white hover:bg-shell'
+                  }`}
+                >
+                  <div className="text-[8px] font-black tracking-[0.2em]">POSER</div>
+                  <div className={`mt-1 text-[6px] uppercase tracking-[0.18em] ${workspaceMode === 'poser' ? 'text-white/70' : 'text-mono-light'}`}>
+                    live overlay
+                  </div>
+                </button>
                 {gaitModeOptions.map((option) => {
                   const active = gaitModeRef.current === option.mode;
                   return (
@@ -922,6 +918,106 @@ const App: React.FC = () => {
                 })}
               </div>
 
+              <div className="space-y-3">
+                <div>
+                  <div className="mb-2 text-[7px] font-black uppercase tracking-[0.24em] text-mono-light">Gravity Center</div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {(['left', 'center', 'right'] as const).map((center) => (
+                      <ToggleChip
+                        key={center}
+                        active={gravityCenter === center}
+                        onClick={() => {
+                          setGravityCenter(center);
+                          logSystem(`Gravity center: ${center.toUpperCase()}`);
+                        }}
+                      >
+                        {center}
+                      </ToggleChip>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </Section>
+
+          <Section title="Poser" count={JOINT_KEYS.length + 1} defaultOpen>
+            <div className="space-y-3">
+              <div className="rounded border border-ridge bg-shell px-3 py-2">
+                <div className="text-[7px] font-black uppercase tracking-[0.26em] text-mono-light">Joint Authoring</div>
+                <div className="text-[8px] font-black uppercase tracking-[0.2em] text-selection">
+                  {workspaceMode === 'poser' ? 'ACTIVE' : 'READY'}
+                </div>
+                <div className="mt-1 text-[7px] font-black uppercase tracking-[0.22em] text-mono-light">
+                  Click a bone body or pivot dot to drag rotation. Shift-click pins.
+                </div>
+              </div>
+
+              <RangeControl
+                label="Body Rotation"
+                value={poserBodyRotation}
+                min={POSE_BODY_ROTATION_MIN}
+                max={POSE_BODY_ROTATION_MAX}
+                step={1}
+                onChange={(nextValue) => setPoserBodyRotation(nextValue)}
+                displayValue={`${Math.round(poserBodyRotation)}°`}
+                helper={poserMotionEnabled ? 'Live overlay on top of the procedural body rotation.' : 'Static pose overlay while motion is frozen.'}
+              />
+
+              <div className="space-y-3 max-h-[28rem] overflow-y-auto pr-1 custom-scrollbar">
+                {JOINT_KEYS.map((key) => {
+                  const currentMode = jointModes[key] ?? 'fk';
+
+                  return (
+                    <div key={key} className="rounded border border-ridge/60 bg-white/75 p-2">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <span className="truncate text-[8px] font-black uppercase tracking-[0.2em] text-ink">
+                          {formatJointLabel(key)}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleJointModeChange(key, 'bend')}
+                            className={`h-6 w-6 rounded border text-[8px] font-black ${
+                              currentMode === 'bend' ? 'border-selection bg-selection text-white' : 'border-ridge bg-white text-ink hover:bg-shell'
+                            }`}
+                          >
+                            B
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleJointModeChange(key, 'stretch')}
+                            className={`h-6 w-6 rounded border text-[8px] font-black ${
+                              currentMode === 'stretch' ? 'border-selection bg-selection text-white' : 'border-ridge bg-white text-ink hover:bg-shell'
+                            }`}
+                          >
+                            S
+                          </button>
+                          <span className="w-12 text-right text-[8px] font-black uppercase tracking-[0.18em] text-selection">
+                            {Math.round(pivotOffsets[key])}°
+                          </span>
+                        </div>
+                      </div>
+                      <input
+                        type="range"
+                        min={POSE_JOINT_SLIDER_MIN}
+                        max={POSE_JOINT_SLIDER_MAX}
+                        step="1"
+                        value={pivotOffsets[key]}
+                        onChange={(event) => handlePoserPivotChange(key, parseFloat(event.target.value))}
+                        className="h-1 w-full accent-selection"
+                      />
+                      <div className="mt-1 text-[6px] font-black uppercase tracking-[0.22em] text-mono-light">
+                        {currentMode.toUpperCase()}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </Section>
+
+          <Section title="Running" count={gaitKeyGroups.core.length + gaitKeyGroups.advanced.length + strideEntryOptions.length} defaultOpen>
+            <div className="space-y-4">
               <div className="grid grid-cols-3 gap-1.5">
                 {strideEntryOptions.map((option) => {
                   const active = strideEntryStyleRef.current === option.style;
@@ -968,7 +1064,8 @@ const App: React.FC = () => {
                 })}
               </div>
 
-              <Section title="Advanced" defaultOpen={false} count={gaitKeyGroups.advanced.length}>
+              <div className="rounded border border-ridge bg-white/70 px-3 py-3">
+                <div className="mb-3 text-[7px] font-black uppercase tracking-[0.26em] text-mono-light">Advanced</div>
                 <div className="space-y-3">
                   {gaitKeyGroups.advanced.map((key) => {
                     const conf = gaitSliderConfig[key];
@@ -987,303 +1084,11 @@ const App: React.FC = () => {
                     );
                   })}
                 </div>
-              </Section>
-
-              <Section title="Balance" defaultOpen={false} count={5}>
-                <div className="space-y-3">
-                  <div>
-                    <div className="mb-2 text-[7px] font-black uppercase tracking-[0.24em] text-mono-light">Gravity Center</div>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      {(['left', 'center', 'right'] as const).map((center) => (
-                        <ToggleChip
-                          key={center}
-                          active={gravityCenter === center}
-                          onClick={() => {
-                            setGravityCenter(center);
-                            logSystem(`Gravity center: ${center.toUpperCase()}`);
-                          }}
-                        >
-                          {center}
-                        </ToggleChip>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="mb-2 text-[7px] font-black uppercase tracking-[0.24em] text-mono-light">Pins</div>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {(['l_foot', 'r_foot'] as const).map((boneKey) => (
-                        <ToggleChip
-                          key={boneKey}
-                          active={activePinsList.includes(boneKey)}
-                          onClick={() => toggleAnchorPin(boneKey)}
-                        >
-                          {boneKey.replace('_', ' ')}
-                        </ToggleChip>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </Section>
-            </div>
-          </Section>
-
-          <Section title="Pose Library" count={POSE_LIBRARY_DB.length} defaultOpen>
-            <div className="space-y-3">
-              <div className="rounded border border-ridge bg-shell px-3 py-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <div className="text-[7px] font-black uppercase tracking-[0.26em] text-mono-light">Selected Library</div>
-                    <div className="text-[8px] font-black uppercase tracking-[0.2em] text-selection">
-                      {selectedLibraryEntry.id} / {selectedLibraryEntry.name}
-                    </div>
-                  </div>
-                  <ToggleChip
-                    active={false}
-                    onClick={applySelectedLibraryToSelectedAnchor}
-                    disabled={!selectedLibraryEntry}
-                  >
-                    Seed Active Anchor
-                  </ToggleChip>
-                </div>
-                <div className="mt-2 flex flex-wrap gap-2 text-[7px] font-black uppercase tracking-[0.2em] text-mono-light">
-                  <span>{selectedLibraryEntry.cat}</span>
-                  <span>{selectedLibraryEntry.src}</span>
-                  <span>{phaseToPercent(selectedLibraryEntry.phaseHint)}%</span>
-                  {selectedLibraryEntry.mirrored && <span className="text-selection">Mirrored</span>}
-                </div>
-                <pre className="mt-2 max-h-20 overflow-y-auto rounded border border-ridge bg-white px-2 py-2 font-mono text-[6px] leading-snug text-mono-mid custom-scrollbar">
-                  {selectedLibraryPoseString}
-                </pre>
-              </div>
-
-              {selectedLibraryGroups.map((group) => (
-                <div key={group.category} className="space-y-2">
-                  <div className="flex items-center justify-between text-[7px] font-black uppercase tracking-[0.26em] text-mono-light">
-                    <span>{group.category}</span>
-                    <span>{group.entries.length}</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    {group.entries.map((entry) => {
-                      const active = selectedLibraryEntry.id === entry.id;
-                      return (
-                        <button
-                          key={entry.id}
-                          type="button"
-                          onClick={() => applyLibraryEntry(entry)}
-                          className={`flex flex-col gap-1.5 rounded border p-2 text-left transition-all ${
-                            active ? 'border-selection bg-selection text-white shadow-md' : 'border-ridge bg-white hover:bg-shell'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[8px] font-black tracking-[0.2em]">{entry.id}</span>
-                            <span className={`rounded px-1.5 py-0.5 text-[6px] uppercase tracking-[0.18em] ${active ? 'bg-white/20 text-white' : 'bg-black/5 text-mono-light'}`}>
-                              {entry.mirrored ? 'mirror' : entry.cat}
-                            </span>
-                          </div>
-                          <div className="text-[8px] font-black uppercase tracking-[0.14em]">{entry.name}</div>
-                          <div className={`text-[6px] uppercase tracking-[0.18em] ${active ? 'text-white/75' : 'text-mono-light'}`}>
-                            {entry.src} · {phaseToPercent(entry.phaseHint)}%
-                          </div>
-                          <div className={`truncate font-mono text-[6px] leading-tight ${active ? 'text-white/85' : 'text-mono-mid'}`}>
-                            {entry.data}
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Section>
-
-          <Section title="Key Poses" count={WALK_KEY_POSE_IDS.length} defaultOpen>
-            <div className="space-y-3">
-              <div className="rounded border border-ridge bg-shell px-3 py-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <div className="text-[7px] font-black uppercase tracking-[0.26em] text-mono-light">Cycle-Derived Editor</div>
-                    <div className={`text-[8px] font-black uppercase tracking-[0.2em] ${keyPoseMode ? 'text-selection' : 'text-mono-light'}`}>
-                      {keyPoseMode ? (keyPoseEditorPlaying ? 'Live follow' : 'Frozen scrub') : 'Runtime only'}
-                    </div>
-                  </div>
-                  <ToggleChip active={keyPoseEditorPlaying && keyPoseMode} onClick={toggleEditorPlayback} disabled={!keyPoseMode}>
-                    {playbackButtonLabel}
-                  </ToggleChip>
-                </div>
-                <div className="mt-2 text-[7px] font-black uppercase tracking-[0.2em] text-mono-light">
-                  {keyPoseMode
-                    ? 'Activate on the current cycle, freeze by default, then scrub and capture contact / down / passing / up.'
-                    : 'Activate key pose mode to snapshot the current walk cycle and author the canonical poses.'}
-                </div>
-                <div className="mt-2 rounded border border-ridge bg-white px-2 py-2 text-[6px] font-black uppercase tracking-[0.18em] text-mono-light">
-                  baseline {phaseToPercent(walkKeyPoseSet.cycleSeed.sampledAtPhase)}% · {walkKeyPoseSet.cycleSeed.helperBeats.length} helper beats
-                </div>
-              </div>
-
-              <RangeControl
-                label="Cycle Preview"
-                value={cyclePreviewValue}
-                min={0}
-                max={100}
-                step={1}
-                onChange={(nextValue) => {
-                  if (!keyPoseMode || keyPoseEditorPlayingRef.current) return;
-                  setKeyPosePreviewPhase(nextValue / 100);
-                }}
-                displayValue={`${cyclePreviewValue}%`}
-                helper={keyPoseMode ? (keyPoseEditorPlaying ? 'LIVE' : 'SCRUB') : 'RUNTIME'}
-                disabled={!keyPoseMode || keyPoseEditorPlaying}
-              />
-
-              <div className="grid grid-cols-2 gap-2">
-                {WALK_KEY_POSE_IDS.map((anchorId) => {
-                  const anchor = walkKeyPoseSet.anchors[anchorId];
-                  const active = walkKeyPoseSet.selectedAnchorId === anchorId;
-                  return (
-                    <button
-                      key={anchorId}
-                      type="button"
-                      onClick={() => setWalkKeyPoseSet((prev) => ({ ...prev, selectedAnchorId: anchorId }))}
-                      className={`rounded border px-2 py-2 text-left transition-all ${
-                        active ? 'border-selection bg-selection text-white shadow-md' : 'border-ridge bg-white hover:bg-shell'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[8px] font-black tracking-[0.2em] uppercase">{anchorId}</span>
-                        <span className={`text-[6px] uppercase tracking-[0.18em] ${active ? 'text-white/75' : 'text-mono-light'}`}>
-                          {phaseToPercent(anchor.phase)}%
-                        </span>
-                      </div>
-                      <div className={`mt-1 text-[6px] uppercase tracking-[0.18em] ${active ? 'text-white/75' : 'text-mono-light'}`}>
-                        {anchor.authored ? 'authored' : 'neutral'} · {anchor.mirror ? 'mirrored' : 'direct'}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="rounded border border-ridge bg-paper p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <div className="text-[7px] font-black uppercase tracking-[0.26em] text-mono-light">Selected Anchor</div>
-                    <div className="text-[8px] font-black uppercase tracking-[0.2em] text-selection">
-                      {selectedAnchor.id} · {phaseToPercent(selectedAnchor.phase)}%
-                    </div>
-                  </div>
-                  <ToggleChip
-                    active={selectedAnchor.mirror}
-                    onClick={toggleSelectedAnchorMirror}
-                    disabled={!keyPoseMode}
-                  >
-                    Mirror {selectedAnchor.mirror ? 'On' : 'Off'}
-                  </ToggleChip>
-                </div>
-
-                <div className="mt-3 space-y-3">
-                  <RangeControl
-                    label="Anchor Phase"
-                    value={selectedAnchorPhaseValue}
-                    min={0}
-                    max={100}
-                    step={1}
-                    onChange={(nextValue) => {
-                      if (!keyPoseMode) return;
-                      setWalkKeyPoseSet((prev) => setWalkKeyPosePhase(prev, prev.selectedAnchorId, nextValue / 100, generateBasePoseAtPhase));
-                    }}
-                    displayValue={`${selectedAnchorPhaseValue}%`}
-                    disabled={!keyPoseMode}
-                  />
-
-                  <div className="flex items-center gap-2">
-                    <label className="flex flex-1 items-center gap-2 rounded border border-ridge bg-white px-2 py-2 text-[8px] font-black uppercase tracking-[0.18em]">
-                      <span className="text-mono-light">Easing</span>
-                      <select
-                        value={selectedAnchor.easing}
-                        onChange={(event) => {
-                          if (!keyPoseMode) return;
-                          const next = event.target.value as EasingType;
-                          setWalkKeyPoseSet((prev) => setWalkKeyPoseEasing(prev, prev.selectedAnchorId, next));
-                        }}
-                        disabled={!keyPoseMode}
-                        className="ml-auto bg-transparent text-selection outline-none disabled:cursor-not-allowed"
-                      >
-                        {WALK_KEY_POSE_EASING_OPTIONS.map((easing) => (
-                          <option key={easing} value={easing}>
-                            {easing}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={captureSelectedAnchor}
-                      disabled={!keyPoseMode}
-                      className="rounded border border-selection bg-selection px-3 py-2 text-[8px] font-black uppercase tracking-[0.18em] text-white transition-all hover:bg-selection-light disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Capture Current
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setWalkKeyPoseSet((prev) => resampleWalkKeyPoseSetFromCycle(prev, generateBasePoseAtPhase, livePhaseRef.current ?? pose.stride_phase ?? 0))}
-                      disabled={!keyPoseMode}
-                      className="rounded border border-selection bg-white px-3 py-2 text-[8px] font-black uppercase tracking-[0.18em] text-ink transition-all hover:bg-shell disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Resample from Cycle
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-2">
-                    <button
-                      type="button"
-                      onClick={resetSelectedAnchor}
-                      disabled={!keyPoseMode}
-                      className="rounded border border-selection bg-white px-3 py-2 text-[8px] font-black uppercase tracking-[0.18em] text-ink transition-all hover:bg-shell disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Reset Anchor
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={resetWalkKeyPoseSet}
-                      disabled={!keyPoseMode}
-                      className="rounded border border-ridge bg-white px-3 py-2 text-[8px] font-black uppercase tracking-[0.18em] text-ink transition-all hover:bg-shell disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Reset Set
-                    </button>
-                    <button
-                      type="button"
-                      onClick={applySelectedLibraryToSelectedAnchor}
-                      className="rounded border border-selection bg-selection px-3 py-2 text-[8px] font-black uppercase tracking-[0.18em] text-white transition-all hover:bg-selection-light"
-                    >
-                      Seed Library
-                    </button>
-                  </div>
-
-                  <div className="rounded border border-ridge bg-white px-2 py-2 text-[6px] font-black uppercase tracking-[0.18em] text-mono-light">
-                    cycle pose {selectedAnchor.id} · {phaseToPercent(selectedAnchor.cyclePose.stride_phase ?? selectedAnchor.phase)}% ·
-                    {' '}
-                    {walkKeyPoseSet.cycleSeed.source}
-                  </div>
-
-                  <pre className="max-h-24 overflow-y-auto rounded border border-ridge bg-white px-2 py-2 font-mono text-[6px] leading-snug text-mono-mid custom-scrollbar">
-                    {selectedAnchorCyclePoseString}
-                  </pre>
-
-                  <pre className="max-h-24 overflow-y-auto rounded border border-ridge bg-white px-2 py-2 font-mono text-[6px] leading-snug text-mono-mid custom-scrollbar">
-                    {selectedAnchorPoseString}
-                  </pre>
-                </div>
               </div>
             </div>
           </Section>
 
-          <Section title="Idle" count={8} defaultOpen={false}>
+          <Section title="Idle" count={7} defaultOpen={false}>
             <div className="space-y-3">
               <RangeControl
                 label="Breathing"
@@ -1348,19 +1153,6 @@ const App: React.FC = () => {
                 onChange={(nextValue) => setIdleSettings((prev) => ({ ...prev, posture: nextValue }))}
                 displayValue={idleSettings.posture.toFixed(2)}
               />
-              <label className="flex items-center gap-2 rounded border border-ridge bg-white px-2 py-2 text-[8px] font-black uppercase tracking-[0.18em]">
-                <span className="text-mono-light">Pinned Feet</span>
-                <select
-                  value={idleSettings.idlePinnedFeet}
-                  onChange={(event) => setIdleSettings((prev) => ({ ...prev, idlePinnedFeet: event.target.value as IdleSettings['idlePinnedFeet'] }))}
-                  className="ml-auto bg-transparent text-selection outline-none"
-                >
-                  <option value="none">none</option>
-                  <option value="left">left</option>
-                  <option value="right">right</option>
-                  <option value="both">both</option>
-                </select>
-              </label>
             </div>
           </Section>
 
@@ -1399,7 +1191,7 @@ const App: React.FC = () => {
                 </label>
                 <button
                   type="button"
-                  onClick={() => requestExport('animated')}
+                  onClick={() => setShowAnimatedExportPicker(true)}
                   disabled={isExporting || Boolean(pendingExport)}
                   className="rounded border border-selection bg-selection px-3 py-2 text-[8px] font-black uppercase tracking-[0.18em] text-white transition-all hover:bg-selection-light disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -1407,108 +1199,62 @@ const App: React.FC = () => {
                 </button>
               </div>
 
-              <RangeControl
-                label="Runtime FPS"
-                value={targetFps}
-                min={24}
-                max={120}
-                step={1}
-                onChange={(nextValue) => setTargetFps(nextValue)}
-                displayValue={`${Math.round(targetFps)} fps`}
-                helper={`Export caps at ${exportFps} fps`}
-              />
-
               <div className="text-[8px] uppercase leading-snug tracking-[0.18em] text-mono-light">
-                Exports use the current key-pose set when the editor is open.
+                Exports use the current procedural walk cycle.
               </div>
             </div>
           </Section>
 
+          {showAnimatedExportPicker && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4">
+              <div className="w-full max-w-sm rounded-2xl border border-ridge bg-white p-4 shadow-2xl">
+                <div className="flex items-start justify-between gap-3 border-b border-ridge pb-3">
+                  <div>
+                    <div className="text-[9px] font-black uppercase tracking-[0.24em] text-ink">Animated Export FPS</div>
+                    <div className="mt-1 text-[7px] font-black uppercase tracking-[0.18em] text-mono-light">
+                      Choose the frame rate for GIF or WebM output.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowAnimatedExportPicker(false)}
+                    className="rounded-full border border-ridge bg-shell px-2 py-1 text-[8px] font-black uppercase tracking-[0.18em] text-ink hover:bg-white"
+                  >
+                    Close
+                  </button>
+                </div>
+
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  {ANIMATED_EXPORT_FPS_OPTIONS.map((fps) => {
+                    const active = animatedExportFps === fps;
+                    return (
+                      <button
+                        key={fps}
+                        type="button"
+                        onClick={() => {
+                          setAnimatedExportFps(fps);
+                          setShowAnimatedExportPicker(false);
+                          requestExport('animated');
+                        }}
+                        className={`rounded border px-3 py-3 text-left transition-all ${
+                          active ? 'border-selection bg-selection text-white shadow-md' : 'border-ridge bg-white hover:bg-shell'
+                        }`}
+                      >
+                        <div className="text-[10px] font-black tracking-[0.18em]">{fps} FPS</div>
+                        <div className={`mt-1 text-[6px] uppercase tracking-[0.16em] ${active ? 'text-white/70' : 'text-mono-light'}`}>
+                          animated export
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
           {showConsole && <SystemLogger logs={systemLogs} isVisible={showConsole} />}
         </div>
       </aside>
-
-      <main
-        className="relative min-h-[24rem] min-w-0 flex-1 overflow-hidden"
-        style={{
-          backgroundImage: 'radial-gradient(circle at top, rgba(17, 24, 39, 0.08), transparent 38%), linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%)',
-        }}
-      >
-        <svg
-          className="absolute inset-0 h-full w-full"
-          viewBox={`${zoomedViewBox.x} ${zoomedViewBox.y} ${zoomedViewBox.width} ${zoomedViewBox.height}`}
-          preserveAspectRatio="xMidYMid meet"
-          role="img"
-          aria-label="Bitruvian mannequin stage"
-        >
-          <defs>
-            <pattern id="stage-grid" width={STAGE_GRID_SIZE} height={STAGE_GRID_SIZE} patternUnits="userSpaceOnUse">
-              <path d={`M ${STAGE_GRID_SIZE} 0 L 0 0 0 ${STAGE_GRID_SIZE}`} fill="none" stroke="rgba(17, 24, 39, 0.08)" strokeWidth="1" />
-            </pattern>
-          </defs>
-
-          <rect x={zoomedViewBox.x} y={zoomedViewBox.y} width={zoomedViewBox.width} height={zoomedViewBox.height} fill="url(#stage-grid)" opacity="0.65" />
-          <AdvancedGrid origin={{ x: 0, y: 0 }} gridSize={STAGE_GRID_SIZE} viewBox={zoomedViewBox} />
-          <SystemGuides floorY={STAGE_GROUND_Y} baseUnitH={DEFAULT_BASE_UNIT_H} />
-
-          <g transform={`translate(${pose.x_offset}, ${STAGE_GROUND_Y - (MANNEQUIN_LOCAL_FLOOR_Y * DEFAULT_BASE_UNIT_H) + pose.y_offset})`}>
-            <Mannequin
-              pose={pose}
-              bodyRotation={pose.bodyRotation ?? 0}
-              pivotOffsets={pivotOffsets}
-              props={proportions}
-              showPivots={displayPivots}
-              showLabels={displayLabels}
-              baseUnitH={DEFAULT_BASE_UNIT_H}
-              onAnchorMouseDown={(boneKey) => handleAnchorMouseDown(boneKey)}
-              draggingBoneKey={null}
-              isPaused={isPaused}
-              activePins={activePinsList}
-              tensions={tensions}
-              jointModes={{}}
-              lotteSettings={lotteSettings}
-              isExploded={keyPoseMode}
-            />
-          </g>
-        </svg>
-
-        <Scanlines />
-
-        <div className="pointer-events-none absolute left-4 top-4 z-20 flex flex-col gap-2">
-          <div className="rounded-full border border-ridge bg-white/85 px-3 py-1.5 text-[7px] font-black uppercase tracking-[0.26em] text-mono-mid shadow-sm backdrop-blur">
-            {shellMode.toUpperCase()} · {motionMode.toUpperCase()} · {keyPoseEditorPlaying && keyPoseMode ? 'LIVE' : keyPoseMode ? 'SCRUB' : 'RUN'}
-          </div>
-          <div className="rounded border border-ridge bg-white/85 px-3 py-1.5 text-[7px] font-black uppercase tracking-[0.24em] text-mono-mid shadow-sm backdrop-blur">
-            anchor {walkKeyPoseSet.selectedAnchorId.toUpperCase()} · {selectedLibraryEntry.name} · {phaseToPercent(pose.stride_phase ?? 0)}%
-          </div>
-        </div>
-
-        <div className="pointer-events-none absolute right-4 top-4 z-20 flex flex-col items-end gap-2">
-          <div className="rounded border border-ridge bg-white/85 px-3 py-1.5 text-right text-[7px] font-black uppercase tracking-[0.24em] text-mono-mid shadow-sm backdrop-blur">
-            {displayLabels ? 'labels on' : 'labels off'} · {displayPivots ? 'pivots on' : 'pivots off'}
-          </div>
-        </div>
-
-        <div className="pointer-events-auto absolute bottom-4 right-4 z-20 flex flex-col gap-1">
-          <button
-            type="button"
-            onClick={() => setZoomIndex(i => Math.min(UI.ZOOM_LEVELS.length - 1, i + 1))}
-            className="rounded border border-ridge bg-white/90 px-2 py-1 text-[8px] font-black uppercase tracking-[0.24em] text-ink hover:bg-shell shadow-sm backdrop-blur"
-          >
-            ZOOM +
-          </button>
-          <div className="rounded border border-ridge bg-white/90 px-2 py-1 text-center text-[7px] font-black uppercase tracking-[0.24em] text-mono-mid shadow-sm backdrop-blur">
-            {zoom.toFixed(2)}x
-          </div>
-          <button
-            type="button"
-            onClick={() => setZoomIndex(i => Math.max(0, i - 1))}
-            className="rounded border border-ridge bg-white/90 px-2 py-1 text-[8px] font-black uppercase tracking-[0.24em] text-ink hover:bg-shell shadow-sm backdrop-blur"
-          >
-            ZOOM -
-          </button>
-        </div>
-      </main>
     </div>
   );
 };

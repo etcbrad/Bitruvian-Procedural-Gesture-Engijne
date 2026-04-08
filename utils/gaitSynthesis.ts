@@ -4,7 +4,7 @@ import { lerp, clamp } from './kinematics';
 type GaitAdjustment = { mul?: number; add?: number; min?: number; max?: number };
 
 const MODE_ENVELOPES: Record<GaitMode, Partial<Record<keyof WalkingEngineGait, GaitAdjustment>>> = {
-  poser: {},
+  idle: {},
   walk: {
     intensity: { mul: 0.8, min: 0.35, max: 1.45 },
     frequency: { mul: 0.74, min: 0.18, max: 1.7 },
@@ -50,7 +50,6 @@ const MODE_ENVELOPES: Record<GaitMode, Partial<Record<keyof WalkingEngineGait, G
     elbow_bend: { mul: 1.04, min: 0, max: 2 },
     torso_swivel: { mul: 1.04, min: 0, max: 1.5 },
   },
-  chaos: {},
 };
 
 const applyAdjustment = (value: number, adjustment?: GaitAdjustment): number => {

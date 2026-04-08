@@ -8,7 +8,7 @@ export class CharacterLibraryManager {
 
   async init(): Promise<void> {
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open('BitruvianMotionEmulatorDB', 1);
+      const req = indexedDB.open('BitruviusMotionEmulatorDB', 1);
       req.onupgradeneeded = (e) => {
         const db = (e.target as any).result;
         if (!db.objectStoreNames.contains(this.storeName)) {

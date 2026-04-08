@@ -3,7 +3,7 @@ import JSZip from 'jszip';
 import { GIFEncoder, applyPalette, quantize } from 'gifenc';
 import { Mannequin } from '../components/Mannequin';
 import { DEFAULT_LOTTE_SETTINGS, DEFAULT_PROPORTIONS, MANNEQUIN_LOCAL_FLOOR_Y } from '../constants';
-import { IdleSettings, LotteSettings, WalkKeyPoseSet, WalkingEngineGait, WalkingEnginePivotOffsets, WalkingEnginePose } from '../types';
+import { IdleSettings, JointModesState, LotteSettings, WalkingEngineGait, WalkingEnginePivotOffsets, WalkingEnginePose } from '../types';
 
 export type AnimatedExportFormat = 'gif' | 'webm';
 
@@ -16,8 +16,9 @@ export type ExportLoopContext = {
   activePins: string[];
   pivotOffsets: WalkingEnginePivotOffsets;
   gravityCenter: 'left' | 'center' | 'right';
-  keyPoseMode: boolean;
-  keyPoseSet: WalkKeyPoseSet;
+  workspaceMode: 'motion' | 'poser';
+  poserBodyRotation: number;
+  jointModes: JointModesState;
   lotteSettings?: LotteSettings;
 };
 
@@ -180,7 +181,7 @@ const buildExportSvg = (context: ExportLoopContext, pose: WalkingEnginePose): st
           isPaused={false}
           activePins={context.activePins}
           tensions={{}}
-          jointModes={{}}
+          jointModes={context.jointModes}
           lotteSettings={lotteSettings}
           ghosts={[]}
           ghostDataGenerator={() => ({})}
@@ -228,9 +229,13 @@ const exportSamplesAsPngZip = async (
         frameCount: samples.length,
         fps: samples.length / (makeLoopDurationMs(context.gait) / 1000),
         gravityCenter: context.gravityCenter,
+        workspaceMode: context.workspaceMode,
+        poser: {
+          bodyRotation: context.poserBodyRotation,
+          jointModes: context.jointModes,
+          pivotOffsets: context.pivotOffsets,
+        },
         gait: context.gait,
-        keyPoseMode: context.keyPoseMode,
-        keyPoseSet: context.keyPoseSet,
       },
       null,
       2,
@@ -258,8 +263,6 @@ const exportKeyframesJson = async (
     gravityCenter: context.gravityCenter,
     gait: context.gait,
     idleSettings: context.idleSettings,
-    keyPoseMode: context.keyPoseMode,
-    keyPoseSet: context.keyPoseSet,
     keyframes,
   };
 
@@ -305,10 +308,14 @@ const exportKeyframesZip = async (
         type: 'keyframes',
         durationMs,
         gravityCenter: context.gravityCenter,
+        workspaceMode: context.workspaceMode,
+        poser: {
+          bodyRotation: context.poserBodyRotation,
+          jointModes: context.jointModes,
+          pivotOffsets: context.pivotOffsets,
+        },
         gait: context.gait,
         idleSettings: context.idleSettings,
-        keyPoseMode: context.keyPoseMode,
-        keyPoseSet: context.keyPoseSet,
         keyframes,
         imageScale: previewScale,
       },
@@ -325,9 +332,13 @@ const exportKeyframesZip = async (
         durationMs,
         frameCount: keyframes.length,
         gravityCenter: context.gravityCenter,
+        workspaceMode: context.workspaceMode,
+        poser: {
+          bodyRotation: context.poserBodyRotation,
+          jointModes: context.jointModes,
+          pivotOffsets: context.pivotOffsets,
+        },
         gait: context.gait,
-        keyPoseMode: context.keyPoseMode,
-        keyPoseSet: context.keyPoseSet,
         includes: ['keyframes.json', 'frames/*.png'],
         imageScale: previewScale,
       },
@@ -445,14 +456,14 @@ export const exportLoopFrames = async (
   fps: number,
 ): Promise<void> => {
   const { samples } = createExportSamples(context, generatePoseAtPhase, fps);
-  await exportSamplesAsPngZip(context, samples, `bitruvian-loop-frames-${createStamp()}.zip`);
+  await exportSamplesAsPngZip(context, samples, `bitruvius-loop-frames-${createStamp()}.zip`);
 };
 
 export const exportKeyframes = async (
   context: ExportLoopContext,
   generatePoseAtPhase: (phase: number) => WalkingEnginePose,
 ): Promise<void> => {
-  await exportKeyframesZip(context, generatePoseAtPhase, `bitruvian-keyframes-${createStamp()}.zip`);
+  await exportKeyframesZip(context, generatePoseAtPhase, `bitruvius-keyframes-${createStamp()}.zip`);
 };
 
 export const exportAnimatedLoop = async (
@@ -465,9 +476,9 @@ export const exportAnimatedLoop = async (
   const { samples } = createExportSamples(context, generatePoseAtPhase, fps);
 
   if (format === 'gif') {
-    await exportGif(context, samples, `bitruvian-loop-${createStamp()}.gif`, exportScale ?? 0.6);
+    await exportGif(context, samples, `bitruvius-loop-${createStamp()}.gif`, exportScale ?? 0.6);
     return;
   }
 
-  await exportWebm(context, samples, `bitruvian-loop-${createStamp()}.webm`, exportScale ?? 0.75);
+  await exportWebm(context, samples, `bitruvius-loop-${createStamp()}.webm`, exportScale ?? 0.75);
 };

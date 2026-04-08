@@ -19,9 +19,11 @@ interface MannequinProps {
   showPivots: boolean;
   showLabels?: boolean;
   baseUnitH: number;
-  onAnchorMouseDown: (boneKey: keyof WalkingEnginePivotOffsets, clientX: number) => void;
+  onAnchorMouseDown: (boneKey: keyof WalkingEnginePivotOffsets, clientX: number, event: React.MouseEvent) => void;
+  onBodyMouseDown?: (boneKey: keyof WalkingEnginePivotOffsets, clientX: number, event: React.MouseEvent) => void;
   draggingBoneKey: keyof WalkingEnginePivotOffsets | null;
   isPaused: boolean;
+  poserActive?: boolean;
   activePins: string[];
   tensions: Record<string, number>;
   jointModes: JointModesState;
@@ -215,8 +217,10 @@ export const Mannequin: React.FC<MannequinProps> = ({
   showLabels = false,
   baseUnitH,
   onAnchorMouseDown,
+  onBodyMouseDown,
   draggingBoneKey,
   isPaused,
+  poserActive = false,
   activePins,
   tensions,
   jointModes,
@@ -336,6 +340,7 @@ export const Mannequin: React.FC<MannequinProps> = ({
     const boneKey = partProps.boneKey;
     const isPinned = Array.isArray(activePins) && activePins.includes(boneKey);
     const currentTension = tensions[boneKey] || 0;
+    const jointMode = jointModes[boneKey] ?? 'fk';
     const boneLength = getScaledDimension(partProps.rawH, partKey, 'h');
     const boneWidth = getScaledDimension(partProps.rawW, partKey, 'w');
     const drawVariant = isExploded && partKey !== 'head' && partKey !== 'collar' && partKey !== 'torso' && partKey !== 'waist'
@@ -361,10 +366,13 @@ export const Mannequin: React.FC<MannequinProps> = ({
           label={partProps.label}
           showPivots={showPivots}
           onAnchorMouseDown={onAnchorMouseDown}
+          onBodyMouseDown={onBodyMouseDown}
           isBeingDragged={draggingBoneKey === boneKey}
-          isPausedAndPivotsVisible={isPaused && showPivots}
+          isPausedAndPivotsVisible={(isPaused || poserActive) && showPivots}
           isPinned={isPinned}
           tension={currentTension}
+          isBendActive={jointMode === 'bend'}
+          isStretchActive={jointMode === 'stretch'}
         />
       </g>
     );

@@ -18,7 +18,8 @@ export interface BoneProps {
   label?: string;
   boneKey?: keyof WalkingEnginePivotOffsets;
   proportionKey?: keyof WalkingEngineProportions;
-  onAnchorMouseDown?: (boneKey: keyof WalkingEnginePivotOffsets, clientX: number) => void;
+  onAnchorMouseDown?: (boneKey: keyof WalkingEnginePivotOffsets, clientX: number, event: React.MouseEvent) => void;
+  onBodyMouseDown?: (boneKey: keyof WalkingEnginePivotOffsets, clientX: number, event: React.MouseEvent) => void;
   isBeingDragged?: boolean;
   isPausedAndPivotsVisible?: boolean;
   patternFillId?: string;
@@ -83,6 +84,7 @@ export const Bone: React.FC<BoneProps> = ({
   label,
   showPlusButton = false,
   onPlusClick,
+  onBodyMouseDown,
 }) => {
   const effectiveDrawLength = isCutoutMode ? Math.max(0, length - CUTOUT_GAP_SIZE * 2) : length;
   const visualEndPoint = drawsUpwards ? -effectiveDrawLength : effectiveDrawLength;
@@ -120,7 +122,16 @@ export const Bone: React.FC<BoneProps> = ({
             fill={patternFillId || (isBendActive ? COLORS.ACCENT_BEND : "currentColor")} 
             stroke={isStretchActive ? COLORS.ACCENT_STRETCH : COLORS.RIDGE} 
             strokeWidth={0.5} 
-            onMouseDown={(e) => isPausedAndPivotsVisible && onAnchorMouseDown && boneKey && onAnchorMouseDown(boneKey, e.clientX)}
+            onMouseDown={(e) => {
+                if (!isPausedAndPivotsVisible || !boneKey) return;
+                if (onBodyMouseDown) {
+                  onBodyMouseDown(boneKey, e.clientX, e);
+                  return;
+                }
+                if (onAnchorMouseDown) {
+                  onAnchorMouseDown(boneKey, e.clientX, e);
+                }
+            }}
             style={{ cursor: isPausedAndPivotsVisible ? 'pointer' : 'default' }}
         />
       )}
@@ -145,7 +156,7 @@ export const Bone: React.FC<BoneProps> = ({
             stroke="white" 
             strokeWidth="1" 
             className={`drop-shadow-md transition-all duration-200 ${cursorStyle}`}
-            onMouseDown={(e) => isPausedAndPivotsVisible && onAnchorMouseDown && onAnchorMouseDown(boneKey, e.clientX)}
+            onMouseDown={(e) => isPausedAndPivotsVisible && onAnchorMouseDown && onAnchorMouseDown(boneKey, e.clientX, e)}
           />
           {isPinned && (
             <circle cx="0" cy="0" r={10 * anchorScale} fill="none" stroke={COLORS.PIN_HIGHLIGHT} strokeWidth="1.5" strokeDasharray="3 3">

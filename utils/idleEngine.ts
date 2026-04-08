@@ -32,7 +32,8 @@ export const updateIdlePhysics = (
   deltaTime: number,
   settings: IdleSettings,
   locomotionWeight: number,
-  traits: string[] = []
+  traits: string[] = [],
+  plantFeet = false,
 ): Partial<WalkingEnginePose> => {
   const t = time;
   const traitBonus = (trait: string, bonus: number) => traits.includes(trait) ? bonus : 0;
@@ -82,6 +83,8 @@ export const updateIdlePhysics = (
   
   const collarHunchYOffset = -tension * 0.06; 
   const shoulderHunchRotation = tension * 6;
+  const plantedKnee = 6 + breathVal * 0.3;
+  const plantedFoot = -90;
 
   if (t >= _nextGazeShiftTime) {
     _gazeTargetX = (Math.random() * 2 - 1) * 6 * settings.gazeSway;
@@ -115,10 +118,12 @@ export const updateIdlePhysics = (
     [PartName.RElbow]: 10 * tension,
     [PartName.LWrist]: 6 * tension + _currentFidgetLeftHand,
     [PartName.RWrist]: 6 * tension + _currentFidgetRightHand,
-    [PartName.LKnee]: 5 + breathVal * 0.3,
-    [PartName.RKnee]: 5 + breathVal * 0.3,
-    [PartName.LThigh]: -8 + swayVal * 8 * settings.weightShift,
-    [PartName.RThigh]: 8 + swayVal * 8 * settings.weightShift,
+    [PartName.LKnee]: plantFeet ? plantedKnee : 5 + breathVal * 0.3,
+    [PartName.RKnee]: plantFeet ? plantedKnee : 5 + breathVal * 0.3,
+    [PartName.LThigh]: plantFeet ? 0 : -8 + swayVal * 8 * settings.weightShift,
+    [PartName.RThigh]: plantFeet ? 0 : 8 + swayVal * 8 * settings.weightShift,
+    [PartName.LAnkle]: plantFeet ? plantedFoot : -90,
+    [PartName.RAnkle]: plantFeet ? plantedFoot : -90,
     x_offset: 0,
     y_offset: 0,
     neck: neckBias + _currentGazeX + _currentFidgetNeck,
