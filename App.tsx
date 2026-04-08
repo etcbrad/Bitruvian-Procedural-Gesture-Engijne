@@ -22,7 +22,9 @@ import {
   compileWalkKeyPoseSet,
   createNeutralWalkKeyPoseSetFromGait,
   findNearestWalkKeyPoseId,
+  mirrorWalkingPose,
   resetWalkKeyPoseAnchor,
+  resampleWalkKeyPoseSetFromCycle,
   setWalkKeyPoseEasing,
   setWalkKeyPoseMirror,
   setWalkKeyPosePhase,
@@ -313,6 +315,7 @@ const App: React.FC = () => {
     rightCompression: number;
   } | null>(null);
   const [systemLogs, setSystemLogs] = useState<{ timestamp: string; message: string }[]>([]);
+  const [zoomIndex, setZoomIndex] = useState(UI.DEFAULT_ZOOM_INDEX);
 
   const activePinsList = Array.isArray(activePins) ? activePins : [];
   const keyPoseMode = shellMode === 'editor';
@@ -323,11 +326,22 @@ const App: React.FC = () => {
   const selectedLibraryPose = useMemo(() => stringToPose(selectedLibraryEntry.data), [selectedLibraryEntry]);
   const selectedLibraryPoseString = useMemo(() => poseToString(selectedLibraryPose), [selectedLibraryPose]);
   const selectedAnchorPoseString = useMemo(() => poseToString(selectedAnchor.pose), [selectedAnchor]);
+  const selectedAnchorCyclePoseString = useMemo(() => poseToString(selectedAnchor.cyclePose), [selectedAnchor]);
   const selectedLibraryGroups = useMemo(() => POSE_LIBRARY_CATEGORIES.map((category) => ({
     category,
     entries: POSE_LIBRARY_DB.filter((entry) => entry.cat === category),
   })), []);
   const exportFps = Math.min(24, targetFps);
+
+  const zoom = UI.ZOOM_LEVELS[zoomIndex];
+  const zoomedViewBox = useMemo(() => {
+    const z = zoom;
+    const newWidth = STAGE_VIEW_BOX.width / z;
+    const newHeight = STAGE_VIEW_BOX.height / z;
+    const newX = STAGE_VIEW_BOX.x - (newWidth - STAGE_VIEW_BOX.width) / 2;
+    const newY = STAGE_VIEW_BOX.y - (newHeight - STAGE_VIEW_BOX.height) / 2;
+    return { x: newX, y: newY, width: newWidth, height: newHeight };
+  }, [zoom]);
 
   const locomotionStateRef = useRef<LocomotionState>({ ...INITIAL_LOCOMOTION_STATE });
   const lastFrameTimeRef = useRef(0);
@@ -368,12 +382,19 @@ const App: React.FC = () => {
     setSystemLogs((prev) => [...prev.slice(-23), { timestamp: new Date().toLocaleTimeString(), message }]);
   }, []);
 
+  const generateBasePoseAtPhase = useCallback((phase: number) => {
+    const p = normalizePhase(phase) * Math.PI * 2;
+    const locPose = updateLocomotionPhysics(p, { ...INITIAL_LOCOMOTION_STATE }, gait, physics, 1.0);
+    const grounded = applyFootGrounding(locPose, proportions, DEFAULT_BASE_UNIT_H, physics, activePinsList, idleSettings, gravityCenter, 1.0, 16);
+    return grounded.adjustedPose as WalkingEnginePose;
+  }, [activePinsList, gait, gravityCenter, idleSettings, physics, proportions]);
+
   const primeEditorAtPhase = useCallback((phase: number) => {
     const normalizedPhase = normalizePhase(phase);
     keyPoseSnapshotPoseRef.current = { ...poseRef.current };
     keyPoseSnapshotPhaseRef.current = normalizedPhase;
     setShellMode('editor');
-    setKeyPoseEditorPlaying(true);
+    setKeyPoseEditorPlaying(false);
     setKeyPosePreviewPhase(normalizedPhase);
     setWalkKeyPoseSet((prev) => ({
       ...prev,
@@ -382,9 +403,11 @@ const App: React.FC = () => {
   }, []);
 
   const enterEditorAtPhase = useCallback((phase: number) => {
-    primeEditorAtPhase(phase);
-    logSystem(`Shell: editor @ ${phaseToPercent(phase)}%`);
-  }, [logSystem, primeEditorAtPhase]);
+    const normalizedPhase = normalizePhase(phase);
+    primeEditorAtPhase(normalizedPhase);
+    setWalkKeyPoseSet((prev) => resampleWalkKeyPoseSetFromCycle(prev, generateBasePoseAtPhase, normalizedPhase));
+    logSystem(`Shell: editor @ ${phaseToPercent(normalizedPhase)}%`);
+  }, [generateBasePoseAtPhase, logSystem, primeEditorAtPhase]);
 
   const exitEditor = useCallback(() => {
     setShellMode('runtime');
@@ -417,6 +440,7 @@ const App: React.FC = () => {
     setSelectedLibraryId(entry.id);
     setWalkKeyPoseSet((prev) => {
       const targetAnchorId = anchorOverride ?? findNearestWalkKeyPoseId(phase, prev.anchors);
+      const cyclePose = entry.mirrored ? mirrorWalkingPose(generateBasePoseAtPhase(phase)) : generateBasePoseAtPhase(phase);
       return {
         ...prev,
         selectedAnchorId: targetAnchorId,
@@ -428,12 +452,13 @@ const App: React.FC = () => {
             mirror: Boolean(entry.mirrored),
             authored: true,
             pose: { ...poseFromLibrary, stride_phase: phase },
+            cyclePose,
           },
         },
       };
     });
     logSystem(`Library seed: ${entry.id} ${entry.name}`);
-  }, [logSystem, primeEditorAtPhase]);
+  }, [generateBasePoseAtPhase, logSystem, primeEditorAtPhase]);
 
   const applyDisplayedGaitFromBase = useCallback((nextBase: WalkingEngineGait) => {
     gaitBaseRef.current = nextBase;
@@ -470,12 +495,9 @@ const App: React.FC = () => {
     applyDisplayedGaitFromBase(gaitBaseRef.current);
   }, [applyDisplayedGaitFromBase]);
 
-  const generateBasePoseAtPhase = useCallback((phase: number) => {
-    const p = normalizePhase(phase) * Math.PI * 2;
-    const locPose = updateLocomotionPhysics(p, { ...INITIAL_LOCOMOTION_STATE }, gait, physics, 1.0);
-    const grounded = applyFootGrounding(locPose, proportions, DEFAULT_BASE_UNIT_H, physics, activePinsList, idleSettings, gravityCenter, 1.0, 16);
-    return grounded.adjustedPose as WalkingEnginePose;
-  }, [activePinsList, gait, gravityCenter, idleSettings, physics, proportions]);
+  const compiledKeyPoseSet = useMemo(() => (
+    compileWalkKeyPoseSet(walkKeyPoseSet, generateBasePoseAtPhase)
+  ), [generateBasePoseAtPhase, walkKeyPoseSet]);
 
   const toggleAnchorPin = useCallback((boneKey: keyof WalkingEnginePivotOffsets) => {
     setActivePins((prev) => {
@@ -492,9 +514,9 @@ const App: React.FC = () => {
 
   const captureSelectedAnchor = useCallback(() => {
     const anchorId = walkKeyPoseSet.selectedAnchorId;
-    setWalkKeyPoseSet((prev) => captureWalkKeyPoseAnchor(prev, anchorId, poseRef.current, livePhaseRef.current));
+    setWalkKeyPoseSet((prev) => captureWalkKeyPoseAnchor(prev, anchorId, poseRef.current, livePhaseRef.current, generateBasePoseAtPhase));
     logSystem(`Capture: ${anchorId.toUpperCase()}`);
-  }, [logSystem, walkKeyPoseSet.selectedAnchorId]);
+  }, [generateBasePoseAtPhase, logSystem, walkKeyPoseSet.selectedAnchorId]);
 
   const resetSelectedAnchor = useCallback(() => {
     const anchorId = walkKeyPoseSet.selectedAnchorId;
@@ -504,11 +526,11 @@ const App: React.FC = () => {
 
   const resetWalkKeyPoseSet = useCallback(() => {
     setWalkKeyPoseSet((prev) => {
-      const next = createNeutralWalkKeyPoseSetFromGait(gait, physics);
+      const next = createNeutralWalkKeyPoseSetFromGait(gait, physics, livePhaseRef.current ?? pose.stride_phase ?? 0);
       return { ...next, selectedAnchorId: prev.selectedAnchorId };
     });
     logSystem('Key pose set reset');
-  }, [gait, logSystem, physics]);
+  }, [gait, logSystem, physics, pose.stride_phase]);
 
   const toggleSelectedAnchorMirror = useCallback(() => {
     const anchorId = walkKeyPoseSet.selectedAnchorId;
@@ -677,12 +699,14 @@ const App: React.FC = () => {
         playing: keyPoseEditorPlaying,
         previewPhase: keyPosePreviewPhase,
         selectedAnchorId: walkKeyPoseSet.selectedAnchorId,
+        cycleSeed: walkKeyPoseSet.cycleSeed,
         selectedAnchor: {
           phase: selectedAnchor.phase,
           easing: selectedAnchor.easing,
           mirror: selectedAnchor.mirror,
           authored: selectedAnchor.authored,
           data: selectedAnchorPoseString,
+          cycleData: selectedAnchorCyclePoseString,
         },
         keyPoseSet: walkKeyPoseSet,
       },
@@ -718,6 +742,7 @@ const App: React.FC = () => {
     selectedAnchor.mirror,
     selectedAnchor.phase,
     selectedAnchorPoseString,
+    selectedAnchorCyclePoseString,
     selectedLibraryEntry,
     selectedLibraryPoseString,
     shellMode,
@@ -752,10 +777,6 @@ const App: React.FC = () => {
     pivotOffsets,
     walkKeyPoseSet,
   ]);
-
-  const compiledKeyPoseSet = useMemo(() => (
-    compileWalkKeyPoseSet(walkKeyPoseSet, generateBasePoseAtPhase)
-  ), [generateBasePoseAtPhase, walkKeyPoseSet]);
 
   const generatePoseAtPhase = useCallback((phase: number) => {
     const basePose = generateBasePoseAtPhase(phase);
@@ -823,6 +844,7 @@ const App: React.FC = () => {
   const selectedAnchorPhaseValue = phaseToPercent(selectedAnchor.phase);
   const cyclePreviewValue = phaseToPercent(keyPosePreviewPhase);
   const playbackButtonLabel = keyPoseEditorPlaying ? 'PAUSE' : 'PLAY';
+  const keyPoseModeButtonLabel = keyPoseMode ? 'Deactivate Key Pose Mode' : 'Activate Key Pose Mode';
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-shell text-ink xl:flex-row">
@@ -845,7 +867,7 @@ const App: React.FC = () => {
               Runtime
             </ToggleChip>
             <ToggleChip active={shellMode === 'editor'} onClick={() => enterEditorAtPhase(livePhaseRef.current ?? pose.stride_phase ?? 0)}>
-              Editor
+              {keyPoseModeButtonLabel}
             </ToggleChip>
             <ToggleChip active={motionMode === 'locomotion'} onClick={() => setMotionMode('locomotion')}>
               Locomotion
@@ -1080,7 +1102,7 @@ const App: React.FC = () => {
               <div className="rounded border border-ridge bg-shell px-3 py-2">
                 <div className="flex items-center justify-between gap-2">
                   <div>
-                    <div className="text-[7px] font-black uppercase tracking-[0.26em] text-mono-light">Editor</div>
+                    <div className="text-[7px] font-black uppercase tracking-[0.26em] text-mono-light">Cycle-Derived Editor</div>
                     <div className={`text-[8px] font-black uppercase tracking-[0.2em] ${keyPoseMode ? 'text-selection' : 'text-mono-light'}`}>
                       {keyPoseMode ? (keyPoseEditorPlaying ? 'Live follow' : 'Frozen scrub') : 'Runtime only'}
                     </div>
@@ -1090,7 +1112,12 @@ const App: React.FC = () => {
                   </ToggleChip>
                 </div>
                 <div className="mt-2 text-[7px] font-black uppercase tracking-[0.2em] text-mono-light">
-                  {keyPoseMode ? 'Editor mode forces labels and pivots on.' : 'Enter editor mode to scrub and author key poses.'}
+                  {keyPoseMode
+                    ? 'Activate on the current cycle, freeze by default, then scrub and capture contact / down / passing / up.'
+                    : 'Activate key pose mode to snapshot the current walk cycle and author the canonical poses.'}
+                </div>
+                <div className="mt-2 rounded border border-ridge bg-white px-2 py-2 text-[6px] font-black uppercase tracking-[0.18em] text-mono-light">
+                  baseline {phaseToPercent(walkKeyPoseSet.cycleSeed.sampledAtPhase)}% · {walkKeyPoseSet.cycleSeed.helperBeats.length} helper beats
                 </div>
               </div>
 
@@ -1162,7 +1189,7 @@ const App: React.FC = () => {
                     step={1}
                     onChange={(nextValue) => {
                       if (!keyPoseMode) return;
-                      setWalkKeyPoseSet((prev) => setWalkKeyPosePhase(prev, prev.selectedAnchorId, nextValue / 100));
+                      setWalkKeyPoseSet((prev) => setWalkKeyPosePhase(prev, prev.selectedAnchorId, nextValue / 100, generateBasePoseAtPhase));
                     }}
                     displayValue={`${selectedAnchorPhaseValue}%`}
                     disabled={!keyPoseMode}
@@ -1201,6 +1228,17 @@ const App: React.FC = () => {
                     </button>
                     <button
                       type="button"
+                      onClick={() => setWalkKeyPoseSet((prev) => resampleWalkKeyPoseSetFromCycle(prev, generateBasePoseAtPhase, livePhaseRef.current ?? pose.stride_phase ?? 0))}
+                      disabled={!keyPoseMode}
+                      className="rounded border border-selection bg-white px-3 py-2 text-[8px] font-black uppercase tracking-[0.18em] text-ink transition-all hover:bg-shell disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Resample from Cycle
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2">
+                    <button
+                      type="button"
                       onClick={resetSelectedAnchor}
                       disabled={!keyPoseMode}
                       className="rounded border border-selection bg-white px-3 py-2 text-[8px] font-black uppercase tracking-[0.18em] text-ink transition-all hover:bg-shell disabled:cursor-not-allowed disabled:opacity-50"
@@ -1226,6 +1264,16 @@ const App: React.FC = () => {
                       Seed Library
                     </button>
                   </div>
+
+                  <div className="rounded border border-ridge bg-white px-2 py-2 text-[6px] font-black uppercase tracking-[0.18em] text-mono-light">
+                    cycle pose {selectedAnchor.id} · {phaseToPercent(selectedAnchor.cyclePose.stride_phase ?? selectedAnchor.phase)}% ·
+                    {' '}
+                    {walkKeyPoseSet.cycleSeed.source}
+                  </div>
+
+                  <pre className="max-h-24 overflow-y-auto rounded border border-ridge bg-white px-2 py-2 font-mono text-[6px] leading-snug text-mono-mid custom-scrollbar">
+                    {selectedAnchorCyclePoseString}
+                  </pre>
 
                   <pre className="max-h-24 overflow-y-auto rounded border border-ridge bg-white px-2 py-2 font-mono text-[6px] leading-snug text-mono-mid custom-scrollbar">
                     {selectedAnchorPoseString}
@@ -1388,7 +1436,7 @@ const App: React.FC = () => {
       >
         <svg
           className="absolute inset-0 h-full w-full"
-          viewBox={STAGE_VIEW_BOX_STRING}
+          viewBox={`${zoomedViewBox.x} ${zoomedViewBox.y} ${zoomedViewBox.width} ${zoomedViewBox.height}`}
           preserveAspectRatio="xMidYMid meet"
           role="img"
           aria-label="Bitruvian mannequin stage"
@@ -1399,8 +1447,8 @@ const App: React.FC = () => {
             </pattern>
           </defs>
 
-          <rect x={STAGE_VIEW_BOX.x} y={STAGE_VIEW_BOX.y} width={STAGE_VIEW_BOX.width} height={STAGE_VIEW_BOX.height} fill="url(#stage-grid)" opacity="0.65" />
-          <AdvancedGrid origin={{ x: 0, y: 0 }} gridSize={STAGE_GRID_SIZE} viewBox={STAGE_VIEW_BOX} />
+          <rect x={zoomedViewBox.x} y={zoomedViewBox.y} width={zoomedViewBox.width} height={zoomedViewBox.height} fill="url(#stage-grid)" opacity="0.65" />
+          <AdvancedGrid origin={{ x: 0, y: 0 }} gridSize={STAGE_GRID_SIZE} viewBox={zoomedViewBox} />
           <SystemGuides floorY={STAGE_GROUND_Y} baseUnitH={DEFAULT_BASE_UNIT_H} />
 
           <g transform={`translate(${pose.x_offset}, ${STAGE_GROUND_Y - (MANNEQUIN_LOCAL_FLOOR_Y * DEFAULT_BASE_UNIT_H) + pose.y_offset})`}>
@@ -1439,6 +1487,26 @@ const App: React.FC = () => {
           <div className="rounded border border-ridge bg-white/85 px-3 py-1.5 text-right text-[7px] font-black uppercase tracking-[0.24em] text-mono-mid shadow-sm backdrop-blur">
             {displayLabels ? 'labels on' : 'labels off'} · {displayPivots ? 'pivots on' : 'pivots off'}
           </div>
+        </div>
+
+        <div className="pointer-events-auto absolute bottom-4 right-4 z-20 flex flex-col gap-1">
+          <button
+            type="button"
+            onClick={() => setZoomIndex(i => Math.min(UI.ZOOM_LEVELS.length - 1, i + 1))}
+            className="rounded border border-ridge bg-white/90 px-2 py-1 text-[8px] font-black uppercase tracking-[0.24em] text-ink hover:bg-shell shadow-sm backdrop-blur"
+          >
+            ZOOM +
+          </button>
+          <div className="rounded border border-ridge bg-white/90 px-2 py-1 text-center text-[7px] font-black uppercase tracking-[0.24em] text-mono-mid shadow-sm backdrop-blur">
+            {zoom.toFixed(2)}x
+          </div>
+          <button
+            type="button"
+            onClick={() => setZoomIndex(i => Math.max(0, i - 1))}
+            className="rounded border border-ridge bg-white/90 px-2 py-1 text-[8px] font-black uppercase tracking-[0.24em] text-ink hover:bg-shell shadow-sm backdrop-blur"
+          >
+            ZOOM -
+          </button>
         </div>
       </main>
     </div>

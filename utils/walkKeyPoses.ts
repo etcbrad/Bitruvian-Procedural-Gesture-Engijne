@@ -1,7 +1,16 @@
 import { INITIAL_LOCOMOTION_STATE, updateLocomotionPhysics } from './locomotionEngine';
 import { clamp, lerp, easeInOutQuint } from './kinematics';
 import { DEFAULT_PHYSICS } from '../constants';
-import { EasingType, WalkKeyPoseAnchor, WalkKeyPoseId, WalkKeyPoseSet, WalkingEngineGait, WalkingEnginePose } from '../types';
+import {
+  EasingType,
+  WalkKeyPoseAnchor,
+  WalkKeyPoseCycleBeat,
+  WalkKeyPoseCycleSeed,
+  WalkKeyPoseId,
+  WalkKeyPoseSet,
+  WalkingEngineGait,
+  WalkingEnginePose,
+} from '../types';
 
 export const WALK_KEY_POSE_IDS: WalkKeyPoseId[] = ['contact', 'down', 'passing', 'up'];
 
@@ -20,6 +29,14 @@ export const WALK_KEY_POSE_EASING_OPTIONS: EasingType[] = [
   'easeOutQuad',
   'easeInOutCubic',
   'easeInOutQuint',
+];
+
+export const WALK_CYCLE_HELPER_BEATS: WalkKeyPoseCycleBeat[] = [
+  { id: 'recoil', label: 'Recoil', phase: 0.06 },
+  { id: 'settle', label: 'Settle', phase: 0.18 },
+  { id: 'float', label: 'Float', phase: 0.36 },
+  { id: 'release', label: 'Release', phase: 0.64 },
+  { id: 'anticipation', label: 'Anticipation', phase: 0.88 },
 ];
 
 const POSE_BLEND_KEYS: (keyof WalkingEnginePose)[] = [
@@ -54,21 +71,43 @@ const easingFns: Record<EasingType, (t: number) => number> = {
 
 const applyEasing = (t: number, easing: EasingType): number => easingFns[easing]?.(clamp(t, 0, 1)) ?? t;
 
-const createNeutralAnchor = (id: WalkKeyPoseId, poseFactory: (phase: number) => WalkingEnginePose): WalkKeyPoseAnchor => ({
-  id,
-  phase: DEFAULT_WALK_KEY_POSE_PHASES[id],
-  easing: DEFAULT_WALK_KEY_POSE_EASING,
-  mirror: false,
-  authored: false,
-  pose: { ...poseFactory(DEFAULT_WALK_KEY_POSE_PHASES[id]) },
-});
-
-const createAnchor = (anchor: WalkKeyPoseAnchor): WalkKeyPoseAnchor => ({
-  ...anchor,
-  pose: { ...anchor.pose },
-});
-
 const clonePose = (pose: WalkingEnginePose): WalkingEnginePose => ({ ...pose });
+
+const sampleCyclePose = (
+  poseFactory: (phase: number) => WalkingEnginePose,
+  phase: number,
+  mirror = false,
+): WalkingEnginePose => {
+  const pose = clonePose(poseFactory(normalizePhase(phase)));
+  return mirror ? mirrorWalkingPose(pose) : pose;
+};
+
+const buildCycleSeed = (sampledAtPhase: number): WalkKeyPoseCycleSeed => ({
+  source: 'generated-cycle',
+  sampledAtPhase: normalizePhase(sampledAtPhase),
+  helperBeats: WALK_CYCLE_HELPER_BEATS.map((beat) => ({
+    ...beat,
+    phase: normalizePhase(beat.phase),
+  })),
+});
+
+const createAnchor = (
+  id: WalkKeyPoseId,
+  poseFactory: (phase: number) => WalkingEnginePose,
+  phase: number,
+  mirror = false,
+): WalkKeyPoseAnchor => {
+  const cyclePose = sampleCyclePose(poseFactory, phase, mirror);
+  return {
+    id,
+    phase: normalizePhase(phase),
+    easing: DEFAULT_WALK_KEY_POSE_EASING,
+    mirror,
+    authored: false,
+    pose: clonePose(cyclePose),
+    cyclePose: clonePose(cyclePose),
+  };
+};
 
 export const mirrorWalkingPose = (pose: WalkingEnginePose): WalkingEnginePose => ({
   ...pose,
@@ -93,30 +132,68 @@ export const mirrorWalkingPose = (pose: WalkingEnginePose): WalkingEnginePose =>
   y_offset: pose.y_offset,
 });
 
-const buildAnchorSet = (anchorMap: Record<WalkKeyPoseId, WalkKeyPoseAnchor>): WalkKeyPoseSet => ({
+const buildAnchorSet = (
+  poseFactory: (phase: number) => WalkingEnginePose,
+  sampledAtPhase: number,
+  anchorPhases: Record<WalkKeyPoseId, number> = DEFAULT_WALK_KEY_POSE_PHASES,
+): WalkKeyPoseSet => ({
   selectedAnchorId: 'contact',
+  cycleSeed: buildCycleSeed(sampledAtPhase),
   anchors: {
-    contact: createAnchor(anchorMap.contact),
-    down: createAnchor(anchorMap.down),
-    passing: createAnchor(anchorMap.passing),
-    up: createAnchor(anchorMap.up),
+    contact: createAnchor('contact', poseFactory, anchorPhases.contact),
+    down: createAnchor('down', poseFactory, anchorPhases.down),
+    passing: createAnchor('passing', poseFactory, anchorPhases.passing),
+    up: createAnchor('up', poseFactory, anchorPhases.up),
   },
 });
 
-export const createNeutralWalkKeyPoseSet = (poseFactory: (phase: number) => WalkingEnginePose): WalkKeyPoseSet => buildAnchorSet({
-  contact: createNeutralAnchor('contact', poseFactory),
-  down: createNeutralAnchor('down', poseFactory),
-  passing: createNeutralAnchor('passing', poseFactory),
-  up: createNeutralAnchor('up', poseFactory),
-});
+export const createCycleDerivedWalkKeyPoseSet = (
+  poseFactory: (phase: number) => WalkingEnginePose,
+  sampledAtPhase = 0,
+): WalkKeyPoseSet => buildAnchorSet(poseFactory, sampledAtPhase);
 
-export const createNeutralWalkKeyPoseSetFromGait = (gait: WalkingEngineGait, physics = DEFAULT_PHYSICS): WalkKeyPoseSet => {
+export const createNeutralWalkKeyPoseSet = (poseFactory: (phase: number) => WalkingEnginePose): WalkKeyPoseSet => createCycleDerivedWalkKeyPoseSet(poseFactory);
+
+export const createNeutralWalkKeyPoseSetFromGait = (gait: WalkingEngineGait, physics = DEFAULT_PHYSICS, sampledAtPhase = 0): WalkKeyPoseSet => {
   const poseFactory = (phase: number): WalkingEnginePose => {
     const p = phase * Math.PI * 2;
     return updateLocomotionPhysics(p, { ...INITIAL_LOCOMOTION_STATE }, gait, physics, 1.0) as WalkingEnginePose;
   };
 
-  return createNeutralWalkKeyPoseSet(poseFactory);
+  return createCycleDerivedWalkKeyPoseSet(poseFactory, sampledAtPhase);
+};
+
+const reseedAnchorFromCycle = (
+  anchor: WalkKeyPoseAnchor,
+  poseFactory: (phase: number) => WalkingEnginePose,
+): WalkKeyPoseAnchor => {
+  const cyclePose = sampleCyclePose(poseFactory, anchor.phase, anchor.mirror);
+  return {
+    ...anchor,
+    cyclePose,
+    pose: anchor.authored ? clonePose(anchor.pose) : clonePose(cyclePose),
+  };
+};
+
+export const resampleWalkKeyPoseSetFromCycle = (
+  set: WalkKeyPoseSet,
+  poseFactory: (phase: number) => WalkingEnginePose,
+  sampledAtPhase: number,
+): WalkKeyPoseSet => {
+  const nextAnchors = { ...set.anchors };
+
+  WALK_KEY_POSE_IDS.forEach((id) => {
+    nextAnchors[id] = reseedAnchorFromCycle(nextAnchors[id], poseFactory);
+  });
+
+  return {
+    ...set,
+    cycleSeed: {
+      ...set.cycleSeed,
+      sampledAtPhase: normalizePhase(sampledAtPhase),
+    },
+    anchors: nextAnchors,
+  };
 };
 
 export const syncNeutralWalkKeyPoseSetToGait = (
@@ -124,25 +201,12 @@ export const syncNeutralWalkKeyPoseSetToGait = (
   gait: WalkingEngineGait,
   physics = DEFAULT_PHYSICS,
 ): WalkKeyPoseSet => {
-  let changed = false;
-  const nextAnchors = { ...set.anchors };
-
-  WALK_KEY_POSE_IDS.forEach((id) => {
-    const anchor = nextAnchors[id];
-    if (anchor.authored) return;
-    const p = anchor.phase * Math.PI * 2;
-    nextAnchors[id] = {
-      ...anchor,
-      pose: updateLocomotionPhysics(p, { ...INITIAL_LOCOMOTION_STATE }, gait, physics, 1.0) as WalkingEnginePose,
-    };
-    changed = true;
-  });
-
-  if (!changed) return set;
-  return {
-    ...set,
-    anchors: nextAnchors,
+  const poseFactory = (phase: number): WalkingEnginePose => {
+    const p = phase * Math.PI * 2;
+    return updateLocomotionPhysics(p, { ...INITIAL_LOCOMOTION_STATE }, gait, physics, 1.0) as WalkingEnginePose;
   };
+
+  return resampleWalkKeyPoseSetFromCycle(set, poseFactory, set.cycleSeed.sampledAtPhase);
 };
 
 const phaseDistance = (a: number, b: number): number => {
@@ -175,10 +239,16 @@ export const captureWalkKeyPoseAnchor = (
   anchorId: WalkKeyPoseId,
   currentPose: WalkingEnginePose,
   currentPhase?: number,
+  poseFactory?: (phase: number) => WalkingEnginePose,
 ): WalkKeyPoseSet => {
   const anchor = set.anchors[anchorId];
   const phase = normalizePhaseReference(currentPhase ?? currentPose.stride_phase ?? anchor.phase);
   const pose = anchor.mirror ? mirrorWalkingPose(currentPose) : clonePose(currentPose);
+  const cyclePose = poseFactory
+    ? sampleCyclePose(poseFactory, phase, anchor.mirror)
+    : anchor.mirror
+      ? mirrorWalkingPose(currentPose)
+      : clonePose(currentPose);
 
   return {
     ...set,
@@ -187,6 +257,7 @@ export const captureWalkKeyPoseAnchor = (
       [anchorId]: {
         ...anchor,
         phase,
+        cyclePose,
         pose,
         authored: true,
       },
@@ -201,7 +272,8 @@ export const resetWalkKeyPoseAnchor = (
 ): WalkKeyPoseSet => {
   const anchor = set.anchors[anchorId];
   const phase = DEFAULT_WALK_KEY_POSE_PHASES[anchorId];
-  const pose = anchor.mirror ? mirrorWalkingPose(poseFactory(phase)) : clonePose(poseFactory(phase));
+  const cyclePose = sampleCyclePose(poseFactory, phase, anchor.mirror);
+  const pose = clonePose(cyclePose);
 
   return {
     ...set,
@@ -211,6 +283,7 @@ export const resetWalkKeyPoseAnchor = (
         ...anchor,
         phase,
         easing: DEFAULT_WALK_KEY_POSE_EASING,
+        cyclePose,
         pose,
         authored: false,
       },
@@ -224,15 +297,21 @@ export const setWalkKeyPosePhase = (
   set: WalkKeyPoseSet,
   anchorId: WalkKeyPoseId,
   phase: number,
+  poseFactory?: (phase: number) => WalkingEnginePose,
 ): WalkKeyPoseSet => {
   const anchor = set.anchors[anchorId];
+  const normalizedPhase = normalizePhaseReference(phase);
+  const cyclePose = poseFactory
+    ? sampleCyclePose(poseFactory, normalizedPhase, anchor.mirror)
+    : anchor.cyclePose;
   return {
     ...set,
     anchors: {
       ...set.anchors,
       [anchorId]: {
         ...anchor,
-        phase: normalizePhaseReference(phase),
+        phase: normalizedPhase,
+        cyclePose,
         authored: true,
       },
     },
@@ -265,6 +344,7 @@ export const setWalkKeyPoseMirror = (
 ): WalkKeyPoseSet => {
   const anchor = set.anchors[anchorId];
   const nextPose = mirror === anchor.mirror ? anchor.pose : mirrorWalkingPose(anchor.pose);
+  const nextCyclePose = mirror === anchor.mirror ? anchor.cyclePose : mirrorWalkingPose(anchor.cyclePose);
   return {
     ...set,
     anchors: {
@@ -273,6 +353,7 @@ export const setWalkKeyPoseMirror = (
         ...anchor,
         mirror,
         pose: nextPose,
+        cyclePose: nextCyclePose,
         authored: true,
       },
     },
@@ -307,7 +388,7 @@ export const compileWalkKeyPoseSet = (
   const anchors = WALK_KEY_POSE_IDS
     .map((id) => {
       const anchor = set.anchors[id];
-      const basePose = poseFactory(anchor.phase);
+      const basePose = clonePose(anchor.cyclePose ?? poseFactory(anchor.phase));
       return {
         ...anchor,
         basePose,

@@ -218,6 +218,18 @@ export type EasingType = 'linear' | 'easeInOutQuint' | 'easeInQuad' | 'easeOutQu
 
 export type WalkKeyPoseId = 'contact' | 'down' | 'passing' | 'up';
 
+export type WalkKeyPoseCycleBeat = {
+  id: string;
+  label: string;
+  phase: number;
+};
+
+export type WalkKeyPoseCycleSeed = {
+  source: 'generated-cycle';
+  sampledAtPhase: number;
+  helperBeats: WalkKeyPoseCycleBeat[];
+};
+
 export type WalkKeyPoseAnchor = {
   id: WalkKeyPoseId;
   phase: number;
@@ -225,11 +237,13 @@ export type WalkKeyPoseAnchor = {
   mirror: boolean;
   authored: boolean;
   pose: WalkingEnginePose;
+  cyclePose: WalkingEnginePose;
 };
 
 export type WalkKeyPoseSet = {
   selectedAnchorId: WalkKeyPoseId;
   anchors: Record<WalkKeyPoseId, WalkKeyPoseAnchor>;
+  cycleSeed: WalkKeyPoseCycleSeed;
 };
 
 export type PoseLibraryCategory = 'Base' | 'Action' | 'Dance' | 'Still' | 'Character';

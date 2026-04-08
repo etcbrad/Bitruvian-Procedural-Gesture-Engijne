@@ -56,9 +56,9 @@ export const TIMING = {
 };
 
 export const UI = {
-  DEFAULT_ZOOM_INDEX: 4,
+  DEFAULT_ZOOM_INDEX: 5,
   ZOOM_LEVELS: [0.1, 0.2, 0.35, 0.5, 0.75, 1, 1.25, 1.5, 2.0, 3.0, 4.0],
-  BASE_VIEWBOX: { x: -500, y: -1100, width: 1000, height: 1000 },
+  BASE_VIEWBOX: { x: -500, y: -1023, width: 1000, height: 1103 },
 };
 
 export const IDLE_PHYSICS = {
