@@ -470,6 +470,13 @@ const App: React.FC = () => {
     applyDisplayedGaitFromBase(gaitBaseRef.current);
   }, [applyDisplayedGaitFromBase]);
 
+  const generateBasePoseAtPhase = useCallback((phase: number) => {
+    const p = normalizePhase(phase) * Math.PI * 2;
+    const locPose = updateLocomotionPhysics(p, { ...INITIAL_LOCOMOTION_STATE }, gait, physics, 1.0);
+    const grounded = applyFootGrounding(locPose, proportions, DEFAULT_BASE_UNIT_H, physics, activePinsList, idleSettings, gravityCenter, 1.0, 16);
+    return grounded.adjustedPose as WalkingEnginePose;
+  }, [activePinsList, gait, gravityCenter, idleSettings, physics, proportions]);
+
   const toggleAnchorPin = useCallback((boneKey: keyof WalkingEnginePivotOffsets) => {
     setActivePins((prev) => {
       const next = prev.includes(boneKey) ? prev.filter((key) => key !== boneKey) : [...prev, boneKey];
@@ -745,13 +752,6 @@ const App: React.FC = () => {
     pivotOffsets,
     walkKeyPoseSet,
   ]);
-
-  const generateBasePoseAtPhase = useCallback((phase: number) => {
-    const p = normalizePhase(phase) * Math.PI * 2;
-    const locPose = updateLocomotionPhysics(p, { ...INITIAL_LOCOMOTION_STATE }, gait, physics, 1.0);
-    const grounded = applyFootGrounding(locPose, proportions, DEFAULT_BASE_UNIT_H, physics, activePinsList, idleSettings, gravityCenter, 1.0, 16);
-    return grounded.adjustedPose as WalkingEnginePose;
-  }, [activePinsList, gait, gravityCenter, idleSettings, physics, proportions]);
 
   const compiledKeyPoseSet = useMemo(() => (
     compileWalkKeyPoseSet(walkKeyPoseSet, generateBasePoseAtPhase)
