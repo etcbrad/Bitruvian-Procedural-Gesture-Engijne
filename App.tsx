@@ -796,7 +796,7 @@ const App: React.FC = () => {
 
         <Scanlines />
 
-        <div className="pointer-events-none absolute left-4 top-4 z-20 flex flex-col gap-2">
+        <div className="pointer-events-none absolute left-4 top-4 z-20 hidden flex-col gap-2 xl:flex">
           <div className="rounded-full border border-ridge bg-white/85 px-3 py-1.5 text-[7px] font-black uppercase tracking-[0.26em] text-mono-mid shadow-sm backdrop-blur">
             {shellMode.toUpperCase()} · {workspaceMode.toUpperCase()} · {gaitModeRef.current.toUpperCase()} · {isPaused ? 'PAUSED' : 'LIVE'}
           </div>
@@ -805,7 +805,7 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        <div className="pointer-events-none absolute right-4 top-4 z-20 flex flex-col items-end gap-2">
+        <div className="pointer-events-none absolute right-4 top-4 z-20 hidden flex-col items-end gap-2 xl:flex">
           <div className="rounded border border-ridge bg-white/85 px-3 py-1.5 text-right text-[7px] font-black uppercase tracking-[0.24em] text-mono-mid shadow-sm backdrop-blur">
             {displayLabels ? 'labels on' : 'labels off'} · {displayPivots ? 'pivots on' : 'pivots off'}
           </div>
@@ -1252,7 +1252,41 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {showConsole && <SystemLogger logs={systemLogs} isVisible={showConsole} />}
+          {showConsole && (
+            <div className="space-y-3">
+              <div className="rounded border border-ridge bg-shell px-3 py-2 text-[8px] font-black uppercase tracking-[0.2em] text-ink">
+                <div className="mb-2 text-[7px] tracking-[0.24em] text-mono-light">Canvas State</div>
+                <div className="flex flex-wrap gap-2">
+                  <span className="rounded-full border border-ridge bg-white px-2 py-1 text-[7px] tracking-[0.18em] text-mono-mid">
+                    {shellMode.toUpperCase()}
+                  </span>
+                  <span className="rounded-full border border-ridge bg-white px-2 py-1 text-[7px] tracking-[0.18em] text-mono-mid">
+                    {workspaceMode.toUpperCase()}
+                  </span>
+                  <span className="rounded-full border border-ridge bg-white px-2 py-1 text-[7px] tracking-[0.18em] text-mono-mid">
+                    {gaitModeRef.current.toUpperCase()}
+                  </span>
+                  <span className="rounded-full border border-ridge bg-white px-2 py-1 text-[7px] tracking-[0.18em] text-mono-mid">
+                    {isPaused ? 'PAUSED' : 'LIVE'}
+                  </span>
+                  <span className="rounded-full border border-ridge bg-white px-2 py-1 text-[7px] tracking-[0.18em] text-mono-mid">
+                    phase {phaseToPercent(displayedPose.stride_phase ?? 0)}%
+                  </span>
+                  <span className="rounded-full border border-ridge bg-white px-2 py-1 text-[7px] tracking-[0.18em] text-mono-mid">
+                    pins {activePinsList.length}
+                  </span>
+                  <span className="rounded-full border border-ridge bg-white px-2 py-1 text-[7px] tracking-[0.18em] text-mono-mid">
+                    {displayLabels ? 'labels on' : 'labels off'}
+                  </span>
+                  <span className="rounded-full border border-ridge bg-white px-2 py-1 text-[7px] tracking-[0.18em] text-mono-mid">
+                    {displayPivots ? 'pivots on' : 'pivots off'}
+                  </span>
+                </div>
+              </div>
+
+              <SystemLogger logs={systemLogs} isVisible={showConsole} />
+            </div>
+          )}
         </div>
       </aside>
     </div>
