@@ -15,9 +15,9 @@ const MODE_ENVELOPES: Record<GaitMode, Partial<Record<keyof WalkingEngineGait, G
     gravity: { mul: 1.06, min: 0.18, max: 1.1 },
     kick_up_force: { mul: 0.88, min: 0, max: 1.05 },
     foot_roll: { mul: 1.04, min: 0.12, max: 1.1 },
-    toe_bend: { mul: 1.08, min: 0.16, max: 1.1 },
     hip_sway: { mul: 0.82, min: 0.05, max: 1.9 },
     elbow_bend: { mul: 0.9, min: 0, max: 1.65 },
+    knee_bend: { mul: 0.88, min: 0, max: 1.6 },
     torso_swivel: { mul: 0.84, min: 0, max: 1.15 },
   },
   jog: {
@@ -30,9 +30,9 @@ const MODE_ENVELOPES: Record<GaitMode, Partial<Record<keyof WalkingEngineGait, G
     gravity: { mul: 1.0, min: 0.15, max: 1.0 },
     kick_up_force: { mul: 0.98, min: 0, max: 1.15 },
     foot_roll: { mul: 1.0, min: 0.1, max: 1.15 },
-    toe_bend: { mul: 1.0, min: 0.12, max: 1.15 },
     hip_sway: { mul: 0.98, min: 0.05, max: 2.0 },
-    elbow_bend: { mul: 0.98, min: 0, max: 1.85 },
+    elbow_bend: { mul: 1.0, min: 0, max: 1.85 },
+    knee_bend: { mul: 1.0, min: 0, max: 1.75 },
     torso_swivel: { mul: 0.98, min: 0, max: 1.25 },
   },
   run: {
@@ -45,9 +45,9 @@ const MODE_ENVELOPES: Record<GaitMode, Partial<Record<keyof WalkingEngineGait, G
     gravity: { mul: 0.9, min: 0.1, max: 0.95 },
     kick_up_force: { mul: 1.08, min: 0, max: 1.25 },
     foot_roll: { mul: 1.06, min: 0.08, max: 1.2 },
-    toe_bend: { mul: 0.92, min: 0.08, max: 1.05 },
     hip_sway: { mul: 1.04, min: 0.05, max: 2.35 },
-    elbow_bend: { mul: 1.04, min: 0, max: 2 },
+    elbow_bend: { mul: 1.16, min: 0, max: 2 },
+    knee_bend: { mul: 1.2, min: 0, max: 1.9 },
     torso_swivel: { mul: 1.04, min: 0, max: 1.5 },
   },
 };
@@ -115,13 +115,13 @@ export class GaitSynthesizer {
       waist_twist: scale(this.calculateWaistTwist(g), 0.3, g.bodyRoll.variance),
       arm_swing: scale(this.calculateArmSwing(g), 0.6, g.shoulderSwing.variance),
       elbow_bend: scale(this.calculateElbowBend(g), 0.7, 0.1),
+      knee_bend: scale(this.calculateKneeBend(g), 0.72, 0.1),
       arm_spread: scale(this.calculateArmSpread(g), 0.1, 0.05),
       gravity: scale(this.calculateGravity(g), 0.3, 0.1),
       verticality: scale(this.calculateVerticality(g), 0.5, g.bodyBounce.variance),
       kick_up_force: scale(this.calculateKickUpForce(g), 0.4, 0.1),
       hover_height: scale(this.calculateHoverHeight(g), 0.1, 0.05),
       foot_roll: scale(this.calculateFootRoll(g, morphology.constraints), 0.6, 0.1),
-      toe_bend: scale(this.calculateToeBend(g), 0.8, 0.1),
       footDrag: scale(this.calculateFootDrag(g), 0.5, 0.1),
       footSpring: scale(this.calculateFootSpring(g), 0.5, 0.1),
       torso_swivel: scale(this.calculateTorsoSwivel(g), 0.3, 0.1),
@@ -137,6 +137,11 @@ export class GaitSynthesizer {
       elbowFlexibility: scale(this.calculateFlexibility(g), 0.5, 0.1),
       elbowMinBend: scale(this.calculateMinBend(g), -5, 5),
       elbowMaxBend: scale(this.calculateMaxBend(g), 150, 10),
+      asymmetry: scale(this.calculateAsymmetry(g), 0.06, 0.05),
+      limp: scale(this.calculateLimp(g, morphology.tags), 0.02, 0.05),
+      limp_bias: scale(this.calculateLimpBias(morphology.tags), 0, 0),
+      weight_shift: scale(this.calculateWeightShift(g), 0.3, 0.08),
+      step_expression: scale(this.calculateStepExpression(g, morphology.tags), 0.5, 0.08),
     };
 
     if (isQueen) {
@@ -209,6 +214,9 @@ export class GaitSynthesizer {
   private static calculateElbowBend(g: GaitGenome): number {
     return g.shoulderSwing.base * (1.2 + g.confidence * 0.3);
   }
+  private static calculateKneeBend(g: GaitGenome): number {
+    return g.kneeFlexion.base * (1.15 + g.agility * 0.25) * (1 - g.weight * 0.12);
+  }
   private static calculateArmSpread(g: GaitGenome): number {
     return g.shoulderSwing.base * g.agility * 0.6 * (1 - g.weight);
   }
@@ -226,9 +234,6 @@ export class GaitSynthesizer {
   }
   private static calculateFootRoll(g: GaitGenome, constraints: any): number {
     return g.ankleFlexion.base * (constraints.strikeType === 'heel' ? 0.9 : 0.5);
-  }
-  private static calculateToeBend(g: GaitGenome): number {
-    return g.ankleFlexion.base * (1.2 + g.stride.base * 0.2);
   }
   private static calculateFootDrag(g: GaitGenome): number {
     return 1.1 - g.agility * 0.4;
@@ -250,6 +255,34 @@ export class GaitSynthesizer {
   }
   private static calculateFlexibility(g: GaitGenome): number {
     return g.agility * (1.2 - g.weight * 0.4);
+  }
+  private static calculateAsymmetry(g: GaitGenome): number {
+    return clamp(0.05 + (1 - g.stability) * 0.12 + (1 - g.confidence) * 0.05, 0, 0.3);
+  }
+  private static calculateLimp(g: GaitGenome, tags: string[]): number {
+    const clumsy = tags.some((tag) => ['clumsy', 'timid', 'nervous', 'scared'].includes(tag.toLowerCase()));
+    return clamp((1 - g.agility) * 0.08 + (clumsy ? 0.08 : 0), 0, 0.3);
+  }
+  private static calculateLimpBias(tags: string[]): number {
+    if (tags.some((tag) => ['left-leaning', 'left-heavy', 'favor-left'].includes(tag.toLowerCase()))) return -0.5;
+    if (tags.some((tag) => ['right-leaning', 'right-heavy', 'favor-right'].includes(tag.toLowerCase()))) return 0.5;
+    return 0;
+  }
+  private static calculateWeightShift(g: GaitGenome): number {
+    return clamp(0.28 + (g.weight * 0.18) + (1 - g.stability) * 0.08, 0, 0.6);
+  }
+  private static calculateStepExpression(g: GaitGenome, tags: string[]): number {
+    const expressive = tags.some((tag) => ['energetic', 'heroic', 'bold', 'aggressive'].includes(tag.toLowerCase()));
+    const cautious = tags.some((tag) => ['timid', 'nervous', 'relaxed', 'calm'].includes(tag.toLowerCase()));
+    return clamp(
+      0.42
+        + g.stride.base * 0.08
+        + g.bodyBounce.base * 0.12
+        + (expressive ? 0.08 : 0)
+        - (cautious ? 0.04 : 0),
+      0,
+      1,
+    );
   }
   private static calculateMinBend(g: GaitGenome): number {
     return -5 - g.agility * 25;

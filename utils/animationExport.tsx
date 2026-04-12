@@ -2,8 +2,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import JSZip from 'jszip';
 import { GIFEncoder, applyPalette, quantize } from 'gifenc';
 import { Mannequin } from '../components/Mannequin';
-import { DEFAULT_LOTTE_SETTINGS, DEFAULT_PROPORTIONS, MANNEQUIN_LOCAL_FLOOR_Y } from '../constants';
-import { IdleSettings, JointModesState, LotteSettings, WalkingEngineGait, WalkingEnginePivotOffsets, WalkingEnginePose } from '../types';
+import { DEFAULT_LOTTE_SETTINGS, MANNEQUIN_LOCAL_FLOOR_Y } from '../constants';
+import { IdleSettings, JointModesState, LotteSettings, WalkingEngineGait, WalkingEnginePivotOffsets, WalkingEnginePose, WalkingEngineProportions } from '../types';
+import { PhaseKeyframe, blendPhaseKeyframeOffsets, normalizePhaseKeyframes } from './phaseKeyframes';
 
 export type AnimatedExportFormat = 'gif' | 'webm';
 
@@ -13,6 +14,7 @@ export type ExportLoopContext = {
   baseUnitH: number;
   gait: WalkingEngineGait;
   idleSettings: IdleSettings;
+  proportions: WalkingEngineProportions;
   activePins: string[];
   pivotOffsets: WalkingEnginePivotOffsets;
   gravityCenter: 'left' | 'center' | 'right';
@@ -20,6 +22,7 @@ export type ExportLoopContext = {
   poserBodyRotation: number;
   jointModes: JointModesState;
   lotteSettings?: LotteSettings;
+  phaseKeyframes: PhaseKeyframe[];
 };
 
 export type LoopFrameSample = {
@@ -27,6 +30,7 @@ export type LoopFrameSample = {
   timeMs: number;
   phase: number;
   pose: WalkingEnginePose;
+  pivotOffsets: Partial<WalkingEnginePivotOffsets>;
 };
 
 const EXPORT_BACKGROUND = '#F9FAFB';
@@ -116,21 +120,25 @@ const buildSamples = (
   generatePoseAtPhase: (phase: number) => WalkingEnginePose,
 ): LoopFrameSample[] => {
   const durationMs = makeLoopDurationMs(context.gait);
+  const phaseKeyframes = normalizePhaseKeyframes(context.phaseKeyframes);
   return Array.from({ length: sampleCount }, (_, frameIndex) => {
     const phase = frameIndex / sampleCount;
     const timeMs = durationMs * phase;
+    const pose = generatePoseAtPhase(phase);
     return {
       frameIndex,
       timeMs,
       phase,
-      pose: generatePoseAtPhase(phase),
+      pose,
+      pivotOffsets: blendPhaseKeyframeOffsets(phaseKeyframes, phase, { pose }),
     };
   });
 };
 
 const buildKeyframeSamples = (
+  context: ExportLoopContext,
   generatePoseAtPhase: (phase: number) => WalkingEnginePose,
-): Array<{ label: string; phase: number; timeMs: number; pose: WalkingEnginePose }> => {
+): Array<{ label: string; phase: number; timeMs: number; pose: WalkingEnginePose; pivotOffsets: Partial<WalkingEnginePivotOffsets> }> => {
   const keyframeStops = [
     { label: 'start', phase: 0 },
     { label: 'quarter', phase: 0.25 },
@@ -140,14 +148,19 @@ const buildKeyframeSamples = (
   ];
 
   const durationMs = 1;
-  return keyframeStops.map((item) => ({
-    ...item,
-    timeMs: Math.round(durationMs * item.phase),
-    pose: generatePoseAtPhase(item.phase),
-  }));
+  const phaseKeyframes = normalizePhaseKeyframes(context.phaseKeyframes);
+  return keyframeStops.map((item) => {
+    const pose = generatePoseAtPhase(item.phase);
+    return {
+      ...item,
+      timeMs: Math.round(durationMs * item.phase),
+      pose,
+      pivotOffsets: blendPhaseKeyframeOffsets(phaseKeyframes, item.phase, { pose }),
+    };
+  });
 };
 
-const buildExportSvg = (context: ExportLoopContext, pose: WalkingEnginePose): string => {
+const buildExportSvg = (context: ExportLoopContext, pose: WalkingEnginePose, pivotOffsets: Partial<WalkingEnginePivotOffsets>): string => {
   const { x, y, width, height } = parseViewBox(context.viewBox);
   const lotteSettings = context.lotteSettings ?? DEFAULT_LOTTE_SETTINGS;
   const sceneY = context.groundY - (MANNEQUIN_LOCAL_FLOOR_Y * context.baseUnitH) + pose.y_offset;
@@ -168,12 +181,12 @@ const buildExportSvg = (context: ExportLoopContext, pose: WalkingEnginePose): st
       </defs>
       <rect x={x} y={y} width={width} height={height} fill={EXPORT_BACKGROUND} />
       <rect x={x} y={y} width={width} height={height} fill="url(#export-triangle-grid)" opacity="0.55" />
-      <g transform={`translate(${sceneX}, ${sceneY})`}>
+      <g transform={`translate(${sceneX}, ${sceneY}) rotate(${pose.bodyRotation ?? 0})`}>
         <Mannequin
           pose={pose}
-          bodyRotation={pose.bodyRotation ?? 0}
-          pivotOffsets={context.pivotOffsets}
-          props={DEFAULT_PROPORTIONS}
+          bodyRotation={0}
+          pivotOffsets={pivotOffsets}
+          props={context.proportions}
           showPivots={false}
           baseUnitH={context.baseUnitH}
           onAnchorMouseDown={() => undefined}
@@ -183,8 +196,6 @@ const buildExportSvg = (context: ExportLoopContext, pose: WalkingEnginePose): st
           tensions={{}}
           jointModes={context.jointModes}
           lotteSettings={lotteSettings}
-          ghosts={[]}
-          ghostDataGenerator={() => ({})}
         />
       </g>
     </svg>,
@@ -210,7 +221,7 @@ const exportSamplesAsPngZip = async (
   if (!framesFolder) throw new Error('Unable to create zip folder');
 
   for (const sample of samples) {
-    const markup = buildExportSvg(context, sample.pose);
+    const markup = buildExportSvg(context, sample.pose, sample.pivotOffsets);
     await imageToCanvas(canvas, markup);
     const png = await canvasToBlob(canvas, 'image/png');
     const frameName = `frame-${String(sample.frameIndex + 1).padStart(4, '0')}.png`;
@@ -230,6 +241,7 @@ const exportSamplesAsPngZip = async (
         fps: samples.length / (makeLoopDurationMs(context.gait) / 1000),
         gravityCenter: context.gravityCenter,
         workspaceMode: context.workspaceMode,
+        proportions: context.proportions,
         poser: {
           bodyRotation: context.poserBodyRotation,
           jointModes: context.jointModes,
@@ -252,17 +264,28 @@ const exportKeyframesJson = async (
   fileName: string,
 ) => {
   const durationMs = makeLoopDurationMs(context.gait);
-  const keyframes = buildKeyframeSamples(generatePoseAtPhase).map((item) => ({
-    ...item,
+  const keyframes = normalizePhaseKeyframes(context.phaseKeyframes).map((item) => ({
+    phase: item.phase,
     timeMs: Math.round(durationMs * item.phase),
+    offsets: item.offsets,
   }));
 
   const payload = {
     type: 'keyframes',
+    schema: 'phase-keyframes-v1',
+    normalizedPhase: true,
     durationMs,
     gravityCenter: context.gravityCenter,
     gait: context.gait,
     idleSettings: context.idleSettings,
+    workspaceMode: context.workspaceMode,
+    proportions: context.proportions,
+    poser: {
+      bodyRotation: context.poserBodyRotation,
+      jointModes: context.jointModes,
+      pivotOffsets: context.pivotOffsets,
+    },
+    phaseKeyframes: keyframes,
     keyframes,
   };
 
@@ -278,7 +301,7 @@ const exportKeyframesZip = async (
   fileName: string,
 ) => {
   const durationMs = makeLoopDurationMs(context.gait);
-  const keyframes = buildKeyframeSamples(generatePoseAtPhase).map((item) => ({
+  const keyframes = buildKeyframeSamples(context, generatePoseAtPhase).map((item) => ({
     ...item,
     timeMs: Math.round(durationMs * item.phase),
   }));
@@ -291,7 +314,7 @@ const exportKeyframesZip = async (
   if (!framesFolder) throw new Error('Unable to create zip folder');
 
   for (const keyframe of keyframes) {
-    const markup = buildExportSvg(context, keyframe.pose);
+    const markup = buildExportSvg(context, keyframe.pose, keyframe.pivotOffsets);
     await imageToCanvas(canvas, markup);
     const png = await canvasToBlob(canvas, 'image/png');
     const frameName = `${String(keyframe.timeMs).padStart(6, '0')}-${keyframe.label}.png`;
@@ -309,6 +332,7 @@ const exportKeyframesZip = async (
         durationMs,
         gravityCenter: context.gravityCenter,
         workspaceMode: context.workspaceMode,
+        proportions: context.proportions,
         poser: {
           bodyRotation: context.poserBodyRotation,
           jointModes: context.jointModes,
@@ -316,6 +340,11 @@ const exportKeyframesZip = async (
         },
         gait: context.gait,
         idleSettings: context.idleSettings,
+        phaseKeyframes: normalizePhaseKeyframes(context.phaseKeyframes).map((item) => ({
+          phase: item.phase,
+          offsets: item.offsets,
+          timeMs: Math.round(durationMs * item.phase),
+        })),
         keyframes,
         imageScale: previewScale,
       },
@@ -333,12 +362,18 @@ const exportKeyframesZip = async (
         frameCount: keyframes.length,
         gravityCenter: context.gravityCenter,
         workspaceMode: context.workspaceMode,
+        proportions: context.proportions,
         poser: {
           bodyRotation: context.poserBodyRotation,
           jointModes: context.jointModes,
           pivotOffsets: context.pivotOffsets,
         },
         gait: context.gait,
+        phaseKeyframes: normalizePhaseKeyframes(context.phaseKeyframes).map((item) => ({
+          phase: item.phase,
+          offsets: item.offsets,
+          timeMs: Math.round(durationMs * item.phase),
+        })),
         includes: ['keyframes.json', 'frames/*.png'],
         imageScale: previewScale,
       },
@@ -367,7 +402,7 @@ const exportGif = async (
   const delay = Math.max(10, Math.round(makeLoopDurationMs(context.gait) / samples.length));
 
   for (const sample of samples) {
-    await imageToCanvas(canvas, buildExportSvg(context, sample.pose));
+    await imageToCanvas(canvas, buildExportSvg(context, sample.pose, sample.pivotOffsets));
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
 
     if (!palette) {
@@ -425,7 +460,7 @@ const exportWebm = async (
 
   const frameDelay = Math.max(8, Math.round(makeLoopDurationMs(context.gait) / samples.length));
   for (const sample of samples) {
-    await imageToCanvas(canvas, buildExportSvg(context, sample.pose));
+    await imageToCanvas(canvas, buildExportSvg(context, sample.pose, sample.pivotOffsets));
     await new Promise((resolve) => window.setTimeout(resolve, frameDelay));
     if ((sample.frameIndex + 1) % 2 === 0) {
       await yieldToFrame();

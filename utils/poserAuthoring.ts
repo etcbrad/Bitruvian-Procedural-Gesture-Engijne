@@ -1,4 +1,4 @@
-import { JointMode, JointModesState, WalkingEnginePivotOffsets } from '../types';
+import { JointMode, JointModesState, WalkingEnginePivotOffsets, type WalkingEngineProportions } from '../types';
 
 export const JOINT_KEYS: (keyof WalkingEnginePivotOffsets)[] = [
   'waist',
@@ -18,6 +18,25 @@ export const JOINT_KEYS: (keyof WalkingEnginePivotOffsets)[] = [
   'r_knee',
   'r_foot',
 ];
+
+export const PROPORTION_KEYS = [
+  'head',
+  'collar',
+  'torso',
+  'waist',
+  'l_upper_arm',
+  'l_lower_arm',
+  'l_hand',
+  'r_upper_arm',
+  'r_lower_arm',
+  'r_hand',
+  'l_upper_leg',
+  'l_lower_leg',
+  'l_foot',
+  'r_upper_leg',
+  'r_lower_leg',
+  'r_foot',
+] as const satisfies (keyof WalkingEngineProportions)[];
 
 export const KINEMATIC_TREE: Record<keyof WalkingEnginePivotOffsets, (keyof WalkingEnginePivotOffsets)[]> = {
   waist: ['torso', 'l_hip', 'r_hip'],

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Mannequin } from './components/Mannequin';
 import { SystemLogger } from './components/SystemLogger';
 import { AdvancedGrid, Scanlines, SystemGuides } from './components/SystemGrid';
-import { MANNEQUIN_LOCAL_FLOOR_Y, TIMING, UI } from './constants';
+import { DEFAULT_PROPORTIONS, MANNEQUIN_LOCAL_FLOOR_Y, TIMING, UI } from './constants';
 import { BehaviorEngine } from './utils/behaviorEngine';
 import { applyFootGrounding } from './utils/groundingEngine';
 import { updateIdlePhysics } from './utils/idleEngine';
@@ -15,18 +15,21 @@ import { applyGaitModeEnvelope, normalizeGaitModeEnvelope } from './utils/gaitSy
 import { lerp, clamp } from './utils/kinematics';
 import { exportAnimatedLoop, exportKeyframes, exportLoopFrames, type AnimatedExportFormat } from './utils/animationExport';
 import { useMannequinStore } from './store';
+import { PhaseTimeline } from './components/PhaseTimeline';
 import {
   GaitMode,
   IdleSettings,
   JointModesState,
   WalkingEngineGait,
   WalkingEnginePivotOffsets,
+  WalkingEngineProportions,
   WalkingEnginePose,
 } from './types';
 import {
   applyJointCascade,
   formatJointLabel,
   JOINT_KEYS,
+  PROPORTION_KEYS,
   POSE_BODY_ROTATION_MAX,
   POSE_BODY_ROTATION_MIN,
   POSE_DRAG_SENSITIVITY,
@@ -34,6 +37,18 @@ import {
   POSE_JOINT_SLIDER_MIN,
   toggleJointMode,
 } from './utils/poserAuthoring';
+import {
+  PHASE_TIMELINE_MARKERS,
+  blendPhaseKeyframeOffsets,
+  circularPhaseDistance,
+  fillPivotOffsets,
+  findPhaseKeyframeAtPhase,
+  makePhaseKeyframe,
+  normalizePhase,
+  normalizePhaseKeyframes,
+  upsertPhaseKeyframe,
+  type PhaseKeyframe,
+} from './utils/phaseKeyframes';
 
 const DEFAULT_BASE_UNIT_H = 150;
 const STAGE_VIEW_BOX = UI.BASE_VIEWBOX;
@@ -42,8 +57,9 @@ const STAGE_GROUND_Y = UI.BASE_VIEWBOX.y + UI.BASE_VIEWBOX.height - 4;
 const STAGE_GRID_SIZE = 120;
 
 type ShellMode = 'runtime';
-type StrideEntryStyle = 'tiptoe' | 'neutral' | 'drive';
+type StrideEntryStyle = 'light' | 'neutral' | 'drive';
 type WorkspaceMode = 'motion' | 'poser';
+type GaitFamilyPreset = 'balanced' | 'compact' | 'heavy' | 'cautious' | 'limp_left' | 'limp_right' | 'asymmetric';
 
 const gaitSliderConfig: Partial<Record<keyof WalkingEngineGait, { min: number; max: number; step: number; label: string; category: string }>> = {
   intensity: { min: 0, max: 2, step: 0.01, label: 'Kinetic Intensity', category: 'Primary' },
@@ -61,16 +77,29 @@ const gaitSliderConfig: Partial<Record<keyof WalkingEngineGait, { min: number; m
   gravity: { min: 0, max: 1, step: 0.01, label: 'Center of Mass', category: 'Legs' },
   verticality: { min: 0, max: 1, step: 0.01, label: 'Step Magnitude', category: 'Legs' },
   kick_up_force: { min: 0, max: 1, step: 0.01, label: 'Posterior Extension', category: 'Legs' },
-  foot_roll: { min: 0, max: 1, step: 0.01, label: 'Ankle Articulation', category: 'Legs' },
-  toe_bend: { min: 0, max: 1, step: 0.01, label: 'Toe Bend', category: 'Legs' },
+  foot_roll: { min: 0, max: 1, step: 0.01, label: 'Foot Articulation', category: 'Legs' },
+  asymmetry: { min: 0, max: 1, step: 0.01, label: 'Symmetry', category: 'Shape' },
+  limp: { min: 0, max: 1, step: 0.01, label: 'Limp Severity', category: 'Shape' },
+  weight_shift: { min: 0, max: 1, step: 0.01, label: 'Weight Shift', category: 'Shape' },
+  step_expression: { min: 0, max: 1, step: 0.01, label: 'Step Expression', category: 'Shape' },
   heavyStomp: { min: 0, max: 1, step: 0.01, label: 'Impact Density', category: 'Effects' },
   footDrag: { min: 0, max: 1, step: 0.01, label: 'Frictional Drag', category: 'Effects' },
 };
 
 const strideEntryOptions: { style: StrideEntryStyle; label: string; note: string }[] = [
-  { style: 'tiptoe', label: 'TIPTOE', note: 'forefoot' },
+  { style: 'light', label: 'LIGHT', note: 'quiet strike' },
   { style: 'neutral', label: 'NEUTRAL', note: 'midfoot' },
   { style: 'drive', label: 'DRIVE', note: 'push-off' },
+];
+
+const gaitFamilyOptions: { family: GaitFamilyPreset; label: string; note: string }[] = [
+  { family: 'balanced', label: 'BALANCED', note: 'reset' },
+  { family: 'compact', label: 'COMPACT', note: 'shorter steps' },
+  { family: 'heavy', label: 'HEAVY', note: 'loaded stance' },
+  { family: 'cautious', label: 'CAUTIOUS', note: 'careful steps' },
+  { family: 'limp_left', label: 'LIMP L', note: 'left bias' },
+  { family: 'limp_right', label: 'LIMP R', note: 'right bias' },
+  { family: 'asymmetric', label: 'ASYM', note: 'uneven gait' },
 ];
 
 const ANIMATED_EXPORT_FPS_OPTIONS = [6, 12, 15, 24, 30, 60] as const;
@@ -108,11 +137,12 @@ const STRIDE_BANDS: Record<GaitMode, { uiMin: number; uiMax: number; actualMin: 
 type GaitAdjustment = { mul?: number; add?: number; min?: number; max?: number };
 
 const STRIDE_ENTRY_STYLE_ADJUSTMENTS: Record<StrideEntryStyle, Partial<Record<keyof WalkingEngineGait, GaitAdjustment>>> = {
-  tiptoe: {
-    verticality: { mul: 1.06, min: 0.25, max: 1.25 },
-    foot_roll: { mul: 1.16, min: 0.2, max: 1.4 },
-    kick_up_force: { mul: 1.1, min: 0.08, max: 1.35 },
-    footDrag: { mul: 0.94, min: 0.08, max: 1.15 },
+  light: {
+    verticality: { mul: 1.04, min: 0.2, max: 1.2 },
+    foot_roll: { mul: 1.08, min: 0.18, max: 1.25 },
+    kick_up_force: { mul: 1.02, min: 0.05, max: 1.2 },
+    footDrag: { mul: 1.03, min: 0.08, max: 1.15 },
+    step_expression: { mul: 0.95, min: 0.1, max: 1 },
   },
   neutral: {},
   drive: {
@@ -120,15 +150,68 @@ const STRIDE_ENTRY_STYLE_ADJUSTMENTS: Record<StrideEntryStyle, Partial<Record<ke
     foot_roll: { mul: 0.94, min: 0.08, max: 1.25 },
     kick_up_force: { mul: 1.08, min: 0.08, max: 1.35 },
     footDrag: { mul: 0.9, min: 0.05, max: 1.0 },
+    step_expression: { mul: 1.1, min: 0.15, max: 1 },
+  },
+};
+
+const gaitFamilyAdjustments: Record<GaitFamilyPreset, Partial<Record<keyof WalkingEngineGait, GaitAdjustment>>> = {
+  balanced: {},
+  compact: {
+    stride: { mul: 0.78, min: 0.16, max: 1.1 },
+    frequency: { mul: 0.94, min: 0.18, max: 1.8 },
+    verticality: { mul: 0.9, min: 0.2, max: 1 },
+    arm_swing: { mul: 0.88, min: 0.12, max: 1.7 },
+    foot_roll: { mul: 1.06, min: 0.12, max: 1.2 },
+    footDrag: { mul: 1.04, min: 0.1, max: 1.2 },
+    step_expression: { mul: 0.82, min: 0.08, max: 1 },
+  },
+  heavy: {
+    intensity: { mul: 1.05, min: 0.45, max: 2.25 },
+    gravity: { mul: 1.18, min: 0.18, max: 1.2 },
+    stride: { mul: 0.92, min: 0.2, max: 1.6 },
+    footDrag: { mul: 1.14, min: 0.08, max: 1.3 },
+    footSpring: { mul: 1.12, min: 0.05, max: 1.3 },
+    step_expression: { mul: 0.88, min: 0.12, max: 1 },
+    weight_shift: { mul: 1.06, min: 0.2, max: 1 },
+  },
+  cautious: {
+    intensity: { mul: 0.9, min: 0.3, max: 1.8 },
+    frequency: { mul: 0.88, min: 0.15, max: 1.8 },
+    stride: { mul: 0.82, min: 0.16, max: 1.2 },
+    verticality: { mul: 0.84, min: 0.16, max: 1 },
+    arm_swing: { mul: 0.82, min: 0.08, max: 1.5 },
+    footDrag: { mul: 1.2, min: 0.1, max: 1.25 },
+    foot_roll: { mul: 0.96, min: 0.08, max: 1.05 },
+    step_expression: { mul: 0.7, min: 0.05, max: 0.85 },
+  },
+  limp_left: {
+    limp: { mul: 1.25, min: 0.25, max: 1 },
+    limp_bias: { add: -0.9, min: -1, max: 0 },
+    asymmetry: { mul: 1.05, min: 0.15, max: 1 },
+    weight_shift: { mul: 1.08, min: 0.2, max: 1 },
+    stride: { mul: 0.88, min: 0.15, max: 1.25 },
+    step_expression: { mul: 0.88, min: 0.08, max: 0.95 },
+  },
+  limp_right: {
+    limp: { mul: 1.25, min: 0.25, max: 1 },
+    limp_bias: { add: 0.9, min: 0, max: 1 },
+    asymmetry: { mul: 1.05, min: 0.15, max: 1 },
+    weight_shift: { mul: 1.08, min: 0.2, max: 1 },
+    stride: { mul: 0.88, min: 0.15, max: 1.25 },
+    step_expression: { mul: 0.88, min: 0.08, max: 0.95 },
+  },
+  asymmetric: {
+    asymmetry: { mul: 1.35, min: 0.25, max: 1 },
+    weight_shift: { mul: 1.1, min: 0.2, max: 1 },
+    step_expression: { mul: 1.05, min: 0.1, max: 1 },
+    footDrag: { mul: 0.96, min: 0.08, max: 1.1 },
+    arm_spread: { mul: 1.08, min: 0.1, max: 2.25 },
   },
 };
 
 const coreGaitKeys: (keyof WalkingEngineGait)[] = ['intensity', 'frequency', 'stride', 'verticality', 'arm_swing', 'footDrag'];
-const advancedGaitKeys = (Object.keys(gaitSliderConfig) as (keyof WalkingEngineGait)[]).filter((key) => !coreGaitKeys.includes(key));
-const gaitKeyGroups: Record<'core' | 'advanced', (keyof WalkingEngineGait)[]> = {
-  core: coreGaitKeys,
-  advanced: advancedGaitKeys,
-};
+const shapeGaitKeys: (keyof WalkingEngineGait)[] = ['asymmetry', 'limp', 'weight_shift', 'step_expression'];
+const advancedGaitKeys = (Object.keys(gaitSliderConfig) as (keyof WalkingEngineGait)[]).filter((key) => !coreGaitKeys.includes(key) && !shapeGaitKeys.includes(key));
 
 const phaseToPercent = (phase: number): number => Math.round(normalizePhase(phase) * 100);
 const applyGaitAdjustments = (gait: WalkingEngineGait, adjustments: Partial<Record<keyof WalkingEngineGait, GaitAdjustment>>): WalkingEngineGait => {
@@ -168,8 +251,6 @@ const mapStrideValueToPercent = (mode: GaitMode, value: number) => {
   return lerp(band.uiMin, band.uiMax, normalized);
 };
 
-const normalizePhase = (phase: number): number => ((phase % 1) + 1) % 1;
-
 const Section: React.FC<{
   title: string;
   count?: number;
@@ -183,6 +264,7 @@ const Section: React.FC<{
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
+        aria-expanded={isOpen}
         className="flex w-full items-center justify-between gap-3 py-2 text-left text-[9px] font-black uppercase tracking-[0.28em] text-ink transition-colors hover:text-selection"
       >
         <span>{title}</span>
@@ -210,6 +292,7 @@ const ToggleChip: React.FC<{
   <button
     type="button"
     title={title}
+    aria-pressed={active}
     onClick={onClick}
     disabled={disabled}
     className={`rounded-full border px-3 py-1.5 text-[8px] font-black uppercase tracking-[0.24em] transition-all ${
@@ -269,6 +352,7 @@ const App: React.FC = () => {
     setGait,
     setIdleSettings,
     setPivotOffsets,
+    setProportions,
     setActivePins,
     setGravityCenter,
   } = useMannequinStore();
@@ -279,7 +363,6 @@ const App: React.FC = () => {
   const [showLabels, setShowLabels] = useState(false);
   const [showConsole, setShowConsole] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
-  const [poserMotionEnabled, setPoserMotionEnabled] = useState(true);
   const [targetFps, setTargetFps] = useState(TIMING.DEFAULT_TARGET_FPS);
   const [exportFormat, setExportFormat] = useState<AnimatedExportFormat>('gif');
   const [animatedExportFps, setAnimatedExportFps] = useState<number>(24);
@@ -288,6 +371,8 @@ const App: React.FC = () => {
   const [pendingExport, setPendingExport] = useState<{ mode: 'frames' | 'keyframes' | 'animated' } | null>(null);
   const [poserBodyRotation, setPoserBodyRotation] = useState(0);
   const [jointModes, setJointModes] = useState<JointModesState>({});
+  const [phaseCursor, setPhaseCursor] = useState(0);
+  const [phaseKeyframes, setPhaseKeyframes] = useState<PhaseKeyframe[]>([]);
   const [draggingBoneKey, setDraggingBoneKey] = useState<keyof WalkingEnginePivotOffsets | null>(null);
   const [tensions, setTensions] = useState<Record<string, number>>({});
   const [groundingState, setGroundingState] = useState<{
@@ -305,15 +390,23 @@ const App: React.FC = () => {
   } | null>(null);
   const [systemLogs, setSystemLogs] = useState<{ timestamp: string; message: string }[]>([]);
   const [zoomIndex, setZoomIndex] = useState(UI.DEFAULT_ZOOM_INDEX);
+  const exportPickerRef = useRef<HTMLDivElement>(null);
+  const authoringModeRef = useRef(false);
+  const suppressPhaseSyncRef = useRef(false);
 
   const activePinsList = Array.isArray(activePins) ? activePins : [];
   const displayLabels = showLabels;
-  const displayPivots = showPivots;
+  const poserEnabled = workspaceMode === 'poser';
+  const displayPivots = showPivots || poserEnabled;
   const exportFps = Math.min(24, targetFps);
+  const phaseKeyframesNormalized = useMemo(() => normalizePhaseKeyframes(phaseKeyframes), [phaseKeyframes]);
+  const authoringMode = isPaused;
   const displayedPose = useMemo<WalkingEnginePose>(() => ({
     ...pose,
-    bodyRotation: (pose.bodyRotation ?? 0) + poserBodyRotation,
-  }), [pose, poserBodyRotation]);
+    bodyRotation: pose.bodyRotation ?? 0,
+  }), [pose]);
+  const livePhase = normalizePhase(displayedPose.stride_phase ?? 0);
+  const renderPhase = authoringMode ? phaseCursor : livePhase;
 
   const zoom = UI.ZOOM_LEVELS[zoomIndex];
   const zoomedViewBox = useMemo(() => {
@@ -330,20 +423,53 @@ const App: React.FC = () => {
   const lastFrameTimeRef = useRef(0);
   const locomotionWeightRef = useRef(1.0);
   const gaitModeRef = useRef<GaitMode>('walk');
-  const strideEntryStyleRef = useRef<StrideEntryStyle>('tiptoe');
+  const gaitFamilyRef = useRef<GaitFamilyPreset>('balanced');
+  const strideEntryStyleRef = useRef<StrideEntryStyle>('light');
   const gaitBaseRef = useRef<WalkingEngineGait>(normalizeGaitModeEnvelope(gait, gaitModeRef.current));
   const isPausedRef = useRef(isPaused);
   const exportLockRef = useRef(false);
   const poserShowPivotsBeforeRef = useRef(showPivots);
   const dragStartXRef = useRef(0);
   const dragStartValueRef = useRef(0);
+  const pivotOffsetsRef = useRef(pivotOffsets);
 
   useEffect(() => {
     isPausedRef.current = isPaused;
   }, [isPaused]);
 
+  useEffect(() => {
+    pivotOffsetsRef.current = pivotOffsets;
+  }, [pivotOffsets]);
+
+  useEffect(() => {
+    if (!showAnimatedExportPicker) return;
+    exportPickerRef.current?.focus();
+  }, [showAnimatedExportPicker]);
+
   const logSystem = useCallback((message: string) => {
     setSystemLogs((prev) => [...prev.slice(-23), { timestamp: new Date().toLocaleTimeString(), message }]);
+  }, []);
+
+  const updateProportion = useCallback((partKey: keyof WalkingEngineProportions, axis: 'w' | 'h', nextValue: number) => {
+    setProportions((prev) => ({
+      ...prev,
+      [partKey]: {
+        ...prev[partKey],
+        [axis]: nextValue,
+      },
+    }));
+  }, [setProportions]);
+
+  const applyGaitLayers = useCallback((baseGait: WalkingEngineGait): WalkingEngineGait => {
+    const modeGait = applyGaitModeEnvelope(baseGait, gaitModeRef.current);
+    const familyGait = applyGaitAdjustments(modeGait, gaitFamilyAdjustments[gaitFamilyRef.current]);
+    return applyGaitAdjustments(familyGait, STRIDE_ENTRY_STYLE_ADJUSTMENTS[strideEntryStyleRef.current]);
+  }, []);
+
+  const normalizeGaitLayers = useCallback((displayedGait: WalkingEngineGait): WalkingEngineGait => {
+    const withoutStride = normalizeGaitAdjustments(displayedGait, STRIDE_ENTRY_STYLE_ADJUSTMENTS[strideEntryStyleRef.current]);
+    const withoutFamily = normalizeGaitAdjustments(withoutStride, gaitFamilyAdjustments[gaitFamilyRef.current]);
+    return normalizeGaitModeEnvelope(withoutFamily, gaitModeRef.current);
   }, []);
 
   const generateBasePoseAtPhase = useCallback((phase: number) => {
@@ -358,36 +484,43 @@ const App: React.FC = () => {
     return updateIdlePhysics(syntheticTime, 16, idleSettings, 0, [], true) as WalkingEnginePose;
   }, [idleSettings]);
 
+  const generatePoseAtPhase = useCallback((phase: number) => {
+    return gaitModeRef.current === 'idle'
+      ? generateIdlePoseAtPhase(phase)
+      : generateBasePoseAtPhase(phase);
+  }, [generateBasePoseAtPhase, generateIdlePoseAtPhase]);
+
   const applyDisplayedGaitFromBase = useCallback((nextBase: WalkingEngineGait) => {
     gaitBaseRef.current = nextBase;
-    const modeGait = applyGaitModeEnvelope(nextBase, gaitModeRef.current);
-    setGait(applyGaitAdjustments(modeGait, STRIDE_ENTRY_STYLE_ADJUSTMENTS[strideEntryStyleRef.current]));
-  }, [setGait]);
+    setGait(applyGaitLayers(nextBase));
+  }, [applyGaitLayers, setGait]);
 
   const updateDisplayedGaitValue = useCallback((key: keyof WalkingEngineGait, value: number) => {
     setGait((prev) => {
-      const modeNormalized = normalizeGaitModeEnvelope(prev, gaitModeRef.current);
-      const baseNormalized = normalizeGaitAdjustments(modeNormalized, STRIDE_ENTRY_STYLE_ADJUSTMENTS[strideEntryStyleRef.current]);
+      const baseNormalized = normalizeGaitLayers(prev);
       const nextBase = { ...baseNormalized, [key]: value };
       gaitBaseRef.current = nextBase;
-      const modeGait = applyGaitModeEnvelope(nextBase, gaitModeRef.current);
-      return applyGaitAdjustments(modeGait, STRIDE_ENTRY_STYLE_ADJUSTMENTS[strideEntryStyleRef.current]);
+      return applyGaitLayers(nextBase);
     });
-  }, [setGait]);
+  }, [applyGaitLayers, normalizeGaitLayers, setGait]);
 
   const updateGaitMode = useCallback((mode: GaitMode) => {
     gaitModeRef.current = mode;
-    const modeGait = applyGaitModeEnvelope(gaitBaseRef.current, mode);
-    setGait(applyGaitAdjustments(modeGait, STRIDE_ENTRY_STYLE_ADJUSTMENTS[strideEntryStyleRef.current]));
+    setGait(applyGaitLayers(gaitBaseRef.current));
     logSystem(`Gait Mode: ${mode.toUpperCase()}`);
-  }, [setGait, logSystem]);
+  }, [applyGaitLayers, logSystem, setGait]);
+
+  const updateGaitFamily = useCallback((family: GaitFamilyPreset) => {
+    gaitFamilyRef.current = family;
+    setGait(applyGaitLayers(gaitBaseRef.current));
+    logSystem(`Gait Family: ${family.toUpperCase()}`);
+  }, [applyGaitLayers, logSystem, setGait]);
 
   const updateStrideEntryStyle = useCallback((style: StrideEntryStyle) => {
     strideEntryStyleRef.current = style;
-    const modeGait = applyGaitModeEnvelope(gaitBaseRef.current, gaitModeRef.current);
-    setGait(applyGaitAdjustments(modeGait, STRIDE_ENTRY_STYLE_ADJUSTMENTS[style]));
+    setGait(applyGaitLayers(gaitBaseRef.current));
     logSystem(`Stride Entry: ${style.toUpperCase()}`);
-  }, [setGait, logSystem]);
+  }, [applyGaitLayers, logSystem, setGait]);
 
   useEffect(() => {
     applyDisplayedGaitFromBase(gaitBaseRef.current);
@@ -409,17 +542,116 @@ const App: React.FC = () => {
     });
   }, [logSystem, showPivots]);
 
+  const syncPhaseEditorToPhase = useCallback((nextPhase: number) => {
+    const normalizedPhase = normalizePhase(nextPhase);
+    const selectedKeyframe = findPhaseKeyframeAtPhase(phaseKeyframesNormalized, normalizedPhase);
+    const nextOffsets = fillPivotOffsets(
+      selectedKeyframe?.offsets ?? blendPhaseKeyframeOffsets(phaseKeyframesNormalized, normalizedPhase, {
+        pose: generatePoseAtPhase(normalizedPhase),
+      }),
+    );
+
+    setPhaseCursor(normalizedPhase);
+    setPivotOffsets(nextOffsets);
+  }, [generatePoseAtPhase, phaseKeyframesNormalized, setPivotOffsets]);
+
+  const commitPhaseEditorOffsets = useCallback((nextOffsets: WalkingEnginePivotOffsets) => {
+    setPivotOffsets(nextOffsets);
+
+    if (!authoringMode) {
+      return;
+    }
+
+    const normalizedPhase = normalizePhase(phaseCursor);
+    const hasKeyframe = Boolean(findPhaseKeyframeAtPhase(phaseKeyframesNormalized, normalizedPhase));
+
+    if (!hasKeyframe) {
+      return;
+    }
+
+    setPhaseKeyframes((prev) => upsertPhaseKeyframe(prev, makePhaseKeyframe(normalizedPhase, nextOffsets)));
+  }, [authoringMode, phaseCursor, phaseKeyframesNormalized, setPivotOffsets]);
+
+  const handlePhaseCursorChange = useCallback((nextPhase: number) => {
+    syncPhaseEditorToPhase(nextPhase);
+
+    if (!authoringMode) {
+      setIsPaused(true);
+      suppressPhaseSyncRef.current = true;
+      logSystem('Motion paused for phase authoring');
+    }
+  }, [authoringMode, logSystem, syncPhaseEditorToPhase]);
+
+  const handleMarkerClick = useCallback((marker: { phase: number; label: string }) => {
+    const normalizedPhase = normalizePhase(marker.phase);
+    const existing = findPhaseKeyframeAtPhase(phaseKeyframesNormalized, normalizedPhase);
+
+    if (!authoringMode) {
+      setIsPaused(true);
+      suppressPhaseSyncRef.current = true;
+      logSystem('Motion paused for phase authoring');
+    }
+
+    setPhaseCursor(normalizedPhase);
+
+    if (existing) {
+      setPivotOffsets(fillPivotOffsets(existing.offsets));
+      logSystem(`Pose key selected: ${marker.label} ${phaseToPercent(normalizedPhase)}%`);
+      return;
+    }
+
+    const baseline = fillPivotOffsets(blendPhaseKeyframeOffsets(phaseKeyframesNormalized, normalizedPhase, {
+      pose: generatePoseAtPhase(normalizedPhase),
+    }));
+    const nextKeyframes = upsertPhaseKeyframe(
+      phaseKeyframesNormalized,
+      makePhaseKeyframe(normalizedPhase, baseline),
+    );
+
+    setPhaseKeyframes(nextKeyframes);
+    setPivotOffsets(baseline);
+    logSystem(`Pose key dropped: ${marker.label} ${phaseToPercent(normalizedPhase)}%`);
+  }, [authoringMode, generatePoseAtPhase, logSystem, phaseKeyframesNormalized]);
+
+  const handleDropPhaseKey = useCallback(() => {
+    const nextKeyframe = makePhaseKeyframe(phaseCursor, pivotOffsets);
+    setPhaseKeyframes((prev) => upsertPhaseKeyframe(prev, nextKeyframe));
+    setPhaseCursor(nextKeyframe.phase);
+    logSystem(`Pose key saved at ${phaseToPercent(nextKeyframe.phase)}%`);
+  }, [phaseCursor, logSystem, pivotOffsets]);
+
+  useEffect(() => {
+    const nextLivePhase = normalizePhase(displayedPose.stride_phase ?? 0);
+
+    if (!authoringMode) {
+      authoringModeRef.current = false;
+      setPhaseCursor(nextLivePhase);
+      return;
+    }
+
+    if (!authoringModeRef.current) {
+      authoringModeRef.current = true;
+      if (suppressPhaseSyncRef.current) {
+        suppressPhaseSyncRef.current = false;
+      } else {
+        syncPhaseEditorToPhase(nextLivePhase);
+      }
+    }
+  }, [authoringMode, displayedPose.stride_phase, syncPhaseEditorToPhase]);
+
   const handleJointModeChange = useCallback((key: keyof WalkingEnginePivotOffsets, mode: 'bend' | 'stretch') => {
     setJointModes((prev) => toggleJointMode(prev, key, mode));
     logSystem(`Joint mode: ${formatJointLabel(key)} → ${mode.toUpperCase()}`);
   }, [logSystem]);
 
   const handlePoserPivotChange = useCallback((key: keyof WalkingEnginePivotOffsets, nextValue: number) => {
-    setPivotOffsets((prev) => applyJointCascade(prev, key, nextValue, jointModes));
-  }, [jointModes, setPivotOffsets]);
+    // Use ref to ensure consistency with drag operations
+    const nextOffsets = applyJointCascade(pivotOffsetsRef.current, key, nextValue, jointModes);
+    commitPhaseEditorOffsets(nextOffsets);
+  }, [commitPhaseEditorOffsets, jointModes]);
 
   const handleBoneMouseDown = useCallback((boneKey: keyof WalkingEnginePivotOffsets, clientX: number, event: React.MouseEvent) => {
-    const canEditBones = workspaceMode === 'poser' || (isPaused && showPivots);
+    const canEditBones = poserEnabled || (isPaused && showPivots);
     if (!canEditBones) return;
 
     event.preventDefault();
@@ -437,7 +669,7 @@ const App: React.FC = () => {
     setDraggingBoneKey(boneKey);
     dragStartXRef.current = clientX;
     dragStartValueRef.current = pivotOffsets[boneKey];
-  }, [isPaused, logSystem, pivotOffsets, setActivePins, showPivots, workspaceMode]);
+  }, [isPaused, logSystem, pivotOffsets, poserEnabled, setActivePins, showPivots]);
 
   const handleGlobalBoneMouseMove = useCallback((event: MouseEvent) => {
     if (!draggingBoneKey) return;
@@ -449,8 +681,10 @@ const App: React.FC = () => {
       POSE_JOINT_SLIDER_MAX,
     );
 
-    setPivotOffsets((prev) => applyJointCascade(prev, draggingBoneKey, nextValue, jointModes));
-  }, [draggingBoneKey, jointModes, setPivotOffsets]);
+    // Use ref to avoid stale closure - always use current pivotOffsets
+    const nextOffsets = applyJointCascade(pivotOffsetsRef.current, draggingBoneKey, nextValue, jointModes);
+    commitPhaseEditorOffsets(nextOffsets);
+  }, [commitPhaseEditorOffsets, draggingBoneKey, jointModes]);
 
   const handleGlobalBoneMouseUp = useCallback(() => {
     setDraggingBoneKey(null);
@@ -503,7 +737,7 @@ const App: React.FC = () => {
     const animate = (time: number) => {
       frame = window.requestAnimationFrame(animate);
 
-      if (isPausedRef.current || (workspaceMode === 'poser' && !poserMotionEnabled)) {
+      if (isPausedRef.current) {
         lastFrameTimeRef.current = time;
         return;
       }
@@ -542,145 +776,10 @@ const App: React.FC = () => {
     idleSettings,
     physics,
     proportions,
-    poserMotionEnabled,
     setPose,
     targetFps,
     workspaceMode,
   ]);
-
-  useEffect(() => {
-    const renderGameToText = () => JSON.stringify({
-      shellMode,
-      workspaceMode,
-      motionMode: gaitModeRef.current === 'idle' ? 'idle' : 'locomotion',
-      gaitMode: gaitModeRef.current,
-      paused: isPaused,
-      showLabels,
-      showPivots,
-      showConsole,
-      targetFps,
-      exportFormat,
-      pose: {
-        bodyRotation: displayedPose.bodyRotation,
-        waist: displayedPose.waist,
-        torso: displayedPose.torso,
-        collar: displayedPose.collar,
-        neck: displayedPose.neck,
-        lShoulder: displayedPose.l_shoulder,
-        rShoulder: displayedPose.r_shoulder,
-        lElbow: displayedPose.l_elbow,
-        rElbow: displayedPose.r_elbow,
-        lHand: displayedPose.l_hand,
-        rHand: displayedPose.r_hand,
-        lHip: displayedPose.l_hip,
-        rHip: displayedPose.r_hip,
-        lKnee: displayedPose.l_knee,
-        rKnee: displayedPose.r_knee,
-        lFoot: displayedPose.l_foot,
-        rFoot: displayedPose.r_foot,
-        xOffset: displayedPose.x_offset,
-        yOffset: displayedPose.y_offset,
-        stridePhase: displayedPose.stride_phase,
-      },
-      poser: {
-        active: workspaceMode === 'poser',
-        bodyRotationOffset: poserBodyRotation,
-        draggingBoneKey,
-        jointModes,
-        pivotOffsets,
-      },
-      gait: {
-        mode: gaitModeRef.current,
-        entryStyle: strideEntryStyleRef.current,
-        intensity: gait.intensity,
-        frequency: gait.frequency,
-        stride: gait.stride,
-        verticality: gait.verticality,
-        armSwing: gait.arm_swing,
-        footDrag: gait.footDrag,
-        gravity: gait.gravity,
-      },
-      idle: {
-        breathing: idleSettings.breathing,
-        weightShift: idleSettings.weightShift,
-        gazeSway: idleSettings.gazeSway,
-        tension: idleSettings.tension,
-        fidgetFrequency: idleSettings.fidgetFrequency,
-        transitionSpeed: idleSettings.transitionSpeed,
-        posture: idleSettings.posture,
-        idlePinnedFeet: idleSettings.idlePinnedFeet,
-      },
-      balance: {
-        gravityCenter,
-        activePins: activePinsList,
-      },
-      grounding: groundingState,
-      logs: systemLogs.slice(-5),
-      exporting: {
-        active: isExporting,
-        pending: pendingExport?.mode ?? null,
-      },
-    });
-
-    (window as Window & { render_game_to_text?: () => string }).render_game_to_text = renderGameToText;
-    return () => {
-      const target = window as Window & { render_game_to_text?: () => string };
-      if (target.render_game_to_text === renderGameToText) delete target.render_game_to_text;
-    };
-  }, [
-    activePinsList,
-    exportFormat,
-    groundingState,
-    gravityCenter,
-    idleSettings,
-    isExporting,
-    isPaused,
-    pendingExport?.mode,
-    pose,
-    shellMode,
-    showConsole,
-    showLabels,
-    showPivots,
-    systemLogs,
-    targetFps,
-    gait,
-    displayedPose,
-    workspaceMode,
-    poserBodyRotation,
-    draggingBoneKey,
-    jointModes,
-  ]);
-
-  const buildExportContext = useCallback(() => ({
-    viewBox: STAGE_VIEW_BOX_STRING,
-    groundY: STAGE_GROUND_Y,
-    baseUnitH: DEFAULT_BASE_UNIT_H,
-    gait,
-    idleSettings,
-    activePins: activePinsList,
-    pivotOffsets,
-    gravityCenter,
-    lotteSettings,
-    workspaceMode,
-    poserBodyRotation,
-    jointModes,
-  }), [
-    activePinsList,
-    gait,
-    gravityCenter,
-    idleSettings,
-    lotteSettings,
-    pivotOffsets,
-    workspaceMode,
-    poserBodyRotation,
-    jointModes,
-  ]);
-
-  const generatePoseAtPhase = useCallback((phase: number) => {
-    return gaitModeRef.current === 'idle'
-      ? generateIdlePoseAtPhase(phase)
-      : generateBasePoseAtPhase(phase);
-  }, [generateBasePoseAtPhase, generateIdlePoseAtPhase]);
 
   const generatePosedPoseAtPhase = useCallback((phase: number) => {
     const basePose = generatePoseAtPhase(phase);
@@ -689,6 +788,201 @@ const App: React.FC = () => {
       bodyRotation: (basePose.bodyRotation ?? 0) + poserBodyRotation,
     };
   }, [generatePoseAtPhase, poserBodyRotation]);
+
+  const renderPose = useMemo<WalkingEnginePose>(() => {
+    if (authoringMode) {
+      return generatePosedPoseAtPhase(renderPhase);
+    }
+
+    return poserEnabled
+      ? {
+          ...displayedPose,
+          bodyRotation: (displayedPose.bodyRotation ?? 0) + poserBodyRotation,
+        }
+      : displayedPose;
+  }, [authoringMode, displayedPose, generatePosedPoseAtPhase, poserEnabled, poserBodyRotation, renderPhase]);
+  const renderPhaseOffsets = useMemo(
+    () => (poserEnabled
+      ? pivotOffsets
+      : blendPhaseKeyframeOffsets(phaseKeyframesNormalized, renderPhase, { pose: renderPose })),
+    [phaseKeyframesNormalized, pivotOffsets, poserEnabled, renderPhase, renderPose],
+  );
+  const onionSkinSamples = useMemo(() => {
+    if (!authoringMode || phaseKeyframesNormalized.length === 0) {
+      return [];
+    }
+
+    return phaseKeyframesNormalized
+      .map((keyframe) => ({
+        keyframe,
+        distance: circularPhaseDistance(keyframe.phase, renderPhase),
+      }))
+      .filter((item) => item.distance > 0.0005)
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, 3)
+      .map(({ keyframe, distance }) => {
+        const poseAtKeyframe = generatePosedPoseAtPhase(keyframe.phase);
+        const pivotOffsetsAtKeyframe = blendPhaseKeyframeOffsets(phaseKeyframesNormalized, keyframe.phase, {
+          pose: poseAtKeyframe,
+        });
+        const opacity = Math.max(0.12, 0.34 - (distance * 0.45));
+
+        return {
+          keyframe,
+          pose: poseAtKeyframe,
+          pivotOffsets: pivotOffsetsAtKeyframe,
+          opacity,
+        };
+      });
+  }, [authoringMode, generatePosedPoseAtPhase, phaseKeyframesNormalized, renderPhase]);
+
+  const renderGameToText = useMemo(() => () => JSON.stringify({
+    shellMode,
+    workspaceMode,
+    motionMode: gaitModeRef.current === 'idle' ? 'idle' : 'locomotion',
+    gaitMode: gaitModeRef.current,
+    paused: isPaused,
+    showLabels,
+    showPivots,
+    showConsole,
+    targetFps,
+    exportFormat,
+    pose: {
+      bodyRotation: renderPose.bodyRotation,
+      waist: renderPose.waist,
+      torso: renderPose.torso,
+      collar: renderPose.collar,
+      neck: renderPose.neck,
+      lShoulder: renderPose.l_shoulder,
+      rShoulder: renderPose.r_shoulder,
+      lElbow: renderPose.l_elbow,
+      rElbow: renderPose.r_elbow,
+      lHand: renderPose.l_hand,
+      rHand: renderPose.r_hand,
+      lHip: renderPose.l_hip,
+      rHip: renderPose.r_hip,
+      lKnee: renderPose.l_knee,
+      rKnee: renderPose.r_knee,
+      lFoot: renderPose.l_foot,
+      rFoot: renderPose.r_foot,
+      xOffset: renderPose.x_offset,
+      yOffset: renderPose.y_offset,
+      stridePhase: renderPose.stride_phase,
+    },
+    poser: {
+      active: poserEnabled,
+      bodyRotationOffset: poserBodyRotation,
+      draggingBoneKey,
+      jointModes,
+      pivotOffsets,
+    },
+    timeline: {
+      phase: renderPhase,
+      authoring: authoringMode,
+      keyframes: phaseKeyframesNormalized,
+      markers: PHASE_TIMELINE_MARKERS,
+    },
+    gait: {
+      mode: gaitModeRef.current,
+      family: gaitFamilyRef.current,
+      entryStyle: strideEntryStyleRef.current,
+      intensity: gait.intensity,
+      frequency: gait.frequency,
+      stride: gait.stride,
+      verticality: gait.verticality,
+      armSwing: gait.arm_swing,
+      footDrag: gait.footDrag,
+      gravity: gait.gravity,
+      asymmetry: gait.asymmetry,
+      limp: gait.limp,
+      limpBias: gait.limp_bias,
+      weightShift: gait.weight_shift,
+      stepExpression: gait.step_expression,
+    },
+    idle: {
+      breathing: idleSettings.breathing,
+      weightShift: idleSettings.weightShift,
+      gazeSway: idleSettings.gazeSway,
+      tension: idleSettings.tension,
+      fidgetFrequency: idleSettings.fidgetFrequency,
+      transitionSpeed: idleSettings.transitionSpeed,
+      posture: idleSettings.posture,
+      idlePinnedFeet: idleSettings.idlePinnedFeet,
+    },
+    balance: {
+      gravityCenter,
+      activePins: activePinsList,
+    },
+    grounding: groundingState,
+    logs: systemLogs.slice(-5),
+    exporting: {
+      active: isExporting,
+      pending: pendingExport?.mode ?? null,
+    },
+  }), [
+    activePinsList,
+    authoringMode,
+    displayedPose,
+    exportFormat,
+    gait,
+    groundingState,
+    gravityCenter,
+    idleSettings,
+    isExporting,
+    isPaused,
+    pendingExport?.mode,
+    poserBodyRotation,
+    showConsole,
+    showLabels,
+    showPivots,
+    shellMode,
+    systemLogs,
+    targetFps,
+    workspaceMode,
+    draggingBoneKey,
+    jointModes,
+    pivotOffsets,
+    phaseKeyframesNormalized,
+    renderPhase,
+    renderPose,
+  ]);
+
+  useEffect(() => {
+    (window as Window & { render_game_to_text?: () => string }).render_game_to_text = renderGameToText;
+    return () => {
+      const target = window as Window & { render_game_to_text?: () => string };
+      if (target.render_game_to_text === renderGameToText) delete target.render_game_to_text;
+    };
+  }, [renderGameToText]);
+
+  const buildExportContext = useCallback(() => ({
+    viewBox: STAGE_VIEW_BOX_STRING,
+    groundY: STAGE_GROUND_Y,
+    baseUnitH: DEFAULT_BASE_UNIT_H,
+    gait,
+    idleSettings,
+    proportions,
+    activePins: activePinsList,
+    pivotOffsets,
+    gravityCenter,
+    lotteSettings,
+    workspaceMode,
+    poserBodyRotation,
+    jointModes,
+    phaseKeyframes: phaseKeyframesNormalized,
+  }), [
+    activePinsList,
+    gait,
+    gravityCenter,
+    idleSettings,
+    lotteSettings,
+    pivotOffsets,
+    proportions,
+    workspaceMode,
+    poserBodyRotation,
+    jointModes,
+    phaseKeyframesNormalized,
+  ]);
 
   const requestExport = useCallback((mode: 'frames' | 'keyframes' | 'animated') => {
     if (exportLockRef.current || isExporting || pendingExport) return;
@@ -771,11 +1065,41 @@ const App: React.FC = () => {
           <AdvancedGrid origin={{ x: 0, y: 0 }} gridSize={STAGE_GRID_SIZE} viewBox={zoomedViewBox} />
           <SystemGuides floorY={STAGE_GROUND_Y} baseUnitH={DEFAULT_BASE_UNIT_H} />
 
-          <g transform={`translate(${pose.x_offset}, ${STAGE_GROUND_Y - (MANNEQUIN_LOCAL_FLOOR_Y * DEFAULT_BASE_UNIT_H) + pose.y_offset})`}>
+          {onionSkinSamples.map((skin) => (
+            <g
+              key={`onion-${skin.keyframe.phase}`}
+              transform={`translate(${skin.pose.x_offset}, ${STAGE_GROUND_Y - (MANNEQUIN_LOCAL_FLOOR_Y * DEFAULT_BASE_UNIT_H) + skin.pose.y_offset}) rotate(${skin.pose.bodyRotation ?? 0})`}
+              opacity={skin.opacity}
+              style={{ mixBlendMode: 'multiply' }}
+              pointerEvents="none"
+            >
+              <Mannequin
+                pose={skin.pose}
+                bodyRotation={0}
+                pivotOffsets={skin.pivotOffsets}
+                props={proportions}
+                showPivots={false}
+                showLabels={false}
+                baseUnitH={DEFAULT_BASE_UNIT_H}
+                onAnchorMouseDown={handleBoneMouseDown}
+                onBodyMouseDown={handleBoneMouseDown}
+                draggingBoneKey={null}
+                isPaused={true}
+                poserActive={false}
+                activePins={[]}
+                tensions={{}}
+                jointModes={jointModes}
+                lotteSettings={lotteSettings}
+                isExploded={false}
+              />
+            </g>
+          ))}
+
+          <g transform={`translate(${renderPose.x_offset}, ${STAGE_GROUND_Y - (MANNEQUIN_LOCAL_FLOOR_Y * DEFAULT_BASE_UNIT_H) + renderPose.y_offset}) rotate(${renderPose.bodyRotation ?? 0})`}>
             <Mannequin
-              pose={displayedPose}
-              bodyRotation={displayedPose.bodyRotation ?? 0}
-              pivotOffsets={pivotOffsets}
+              pose={renderPose}
+              bodyRotation={0}
+              pivotOffsets={renderPhaseOffsets}
               props={proportions}
               showPivots={displayPivots}
               showLabels={displayLabels}
@@ -784,7 +1108,7 @@ const App: React.FC = () => {
               onBodyMouseDown={handleBoneMouseDown}
               draggingBoneKey={draggingBoneKey}
               isPaused={isPaused}
-              poserActive={workspaceMode === 'poser'}
+              poserActive={poserEnabled}
               activePins={activePinsList}
               tensions={tensions}
               jointModes={jointModes}
@@ -798,10 +1122,10 @@ const App: React.FC = () => {
 
         <div className="pointer-events-none absolute left-4 top-4 z-20 hidden flex-col gap-2 xl:flex">
           <div className="rounded-full border border-ridge bg-white/85 px-3 py-1.5 text-[7px] font-black uppercase tracking-[0.26em] text-mono-mid shadow-sm backdrop-blur">
-            {shellMode.toUpperCase()} · {workspaceMode.toUpperCase()} · {gaitModeRef.current.toUpperCase()} · {isPaused ? 'PAUSED' : 'LIVE'}
+            {shellMode.toUpperCase()} · {workspaceMode.toUpperCase()} · {gaitModeRef.current.toUpperCase()} · {authoringMode ? 'AUTH' : 'LIVE'}
           </div>
           <div className="rounded border border-ridge bg-white/85 px-3 py-1.5 text-[7px] font-black uppercase tracking-[0.24em] text-mono-mid shadow-sm backdrop-blur">
-            gait {gaitModeRef.current.toUpperCase()} · phase {phaseToPercent(displayedPose.stride_phase ?? 0)}% · pins {activePinsList.length}
+            gait {gaitModeRef.current.toUpperCase()} · phase {phaseToPercent(renderPhase)}% · pins {activePinsList.length}
           </div>
         </div>
 
@@ -848,12 +1172,20 @@ const App: React.FC = () => {
 
           <div className="mt-3 flex flex-wrap gap-2">
             <div className="rounded-full border border-ridge bg-white px-3 py-1.5 text-[8px] font-black uppercase tracking-[0.24em] text-ink">
-              Runtime
+              Live
             </div>
+            <ToggleChip active={poserEnabled} onClick={toggleWorkspaceMode}>
+              Poser
+            </ToggleChip>
             <ToggleChip active={isPaused} onClick={handlePauseToggle}>
               {isPaused ? 'Running' : 'Pause'}
             </ToggleChip>
-            <ToggleChip active={displayPivots} onClick={() => setShowPivots((prev) => !prev)} disabled={workspaceMode === 'poser'} title={workspaceMode === 'poser' ? 'Poser forces pivots visible' : 'Toggle joint pivots'}>
+            <ToggleChip
+              active={displayPivots}
+              onClick={() => setShowPivots((prev) => !prev)}
+              disabled={poserEnabled}
+              title={poserEnabled ? 'Poser forces pivots visible' : 'Toggle joint pivots'}
+            >
               Pivots
             </ToggleChip>
             <ToggleChip active={displayLabels} onClick={() => setShowLabels((prev) => !prev)}>
@@ -868,36 +1200,17 @@ const App: React.FC = () => {
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 custom-scrollbar">
           <Section title="Shared" count={gaitModeOptions.length + 2} defaultOpen>
             <div className="space-y-3">
-              <ToggleChip
-                active={poserMotionEnabled}
-                onClick={() => setPoserMotionEnabled((prev) => !prev)}
-              >
-                {poserMotionEnabled ? 'Motion On' : 'Motion Off'}
-              </ToggleChip>
-
               <div className="rounded border border-ridge bg-shell px-3 py-2">
                 <div className="text-[7px] font-black uppercase tracking-[0.26em] text-mono-light">Workspace / Balance</div>
                 <div className="text-[8px] font-black uppercase tracking-[0.2em] text-selection">
                   {workspaceMode.toUpperCase()} · {gaitModeRef.current.toUpperCase()}
                 </div>
                 <div className="mt-1 text-[7px] font-black uppercase tracking-[0.22em] text-mono-light">
-                  Shared controls work across gait motion and the live poser overlay.
+                  Shared controls apply to both motion and poser views. Pause freezes the engine.
                 </div>
               </div>
 
-              <div className="grid grid-cols-5 gap-1.5">
-                <button
-                  type="button"
-                  onClick={toggleWorkspaceMode}
-                  className={`rounded border px-2 py-2 text-left transition-all ${
-                    workspaceMode === 'poser' ? 'border-selection bg-selection text-white shadow-md' : 'border-ridge bg-white hover:bg-shell'
-                  }`}
-                >
-                  <div className="text-[8px] font-black tracking-[0.2em]">POSER</div>
-                  <div className={`mt-1 text-[6px] uppercase tracking-[0.18em] ${workspaceMode === 'poser' ? 'text-white/70' : 'text-mono-light'}`}>
-                    live overlay
-                  </div>
-                </button>
+              <div className="grid grid-cols-4 gap-1.5">
                 {gaitModeOptions.map((option) => {
                   const active = gaitModeRef.current === option.mode;
                   return (
@@ -945,12 +1258,22 @@ const App: React.FC = () => {
               <div className="rounded border border-ridge bg-shell px-3 py-2">
                 <div className="text-[7px] font-black uppercase tracking-[0.26em] text-mono-light">Joint Authoring</div>
                 <div className="text-[8px] font-black uppercase tracking-[0.2em] text-selection">
-                  {workspaceMode === 'poser' ? 'ACTIVE' : 'READY'}
+                  {poserEnabled ? 'ACTIVE' : 'READY'}
                 </div>
                 <div className="mt-1 text-[7px] font-black uppercase tracking-[0.22em] text-mono-light">
-                  Click a bone body or pivot dot to drag rotation. Shift-click pins.
+                  Drag a bone body or pivot dot to rotate. Shift-click pins.
                 </div>
               </div>
+
+              <PhaseTimeline
+                phase={renderPhase}
+                keyframes={phaseKeyframesNormalized}
+                markers={PHASE_TIMELINE_MARKERS}
+                authoringEnabled={authoringMode}
+                onPhaseChange={handlePhaseCursorChange}
+                onMarkerClick={handleMarkerClick}
+                onDropKey={handleDropPhaseKey}
+              />
 
               <RangeControl
                 label="Body Rotation"
@@ -960,10 +1283,10 @@ const App: React.FC = () => {
                 step={1}
                 onChange={(nextValue) => setPoserBodyRotation(nextValue)}
                 displayValue={`${Math.round(poserBodyRotation)}°`}
-                helper={poserMotionEnabled ? 'Live overlay on top of the procedural body rotation.' : 'Static pose overlay while motion is frozen.'}
+                helper="Adds an offset to the procedural body rotation."
               />
 
-              <div className="space-y-3 max-h-[28rem] overflow-y-auto pr-1 custom-scrollbar">
+              <div className="pointer-events-auto space-y-3 max-h-[28rem] overflow-y-auto pr-1 custom-scrollbar">
                 {JOINT_KEYS.map((key) => {
                   const currentMode = jointModes[key] ?? 'fk';
 
@@ -1004,7 +1327,7 @@ const App: React.FC = () => {
                         step="1"
                         value={pivotOffsets[key]}
                         onChange={(event) => handlePoserPivotChange(key, parseFloat(event.target.value))}
-                        className="h-1 w-full accent-selection"
+                        className="h-1 w-full cursor-pointer pointer-events-auto accent-selection"
                       />
                       <div className="mt-1 text-[6px] font-black uppercase tracking-[0.22em] text-mono-light">
                         {currentMode.toUpperCase()}
@@ -1016,31 +1339,121 @@ const App: React.FC = () => {
             </div>
           </Section>
 
-          <Section title="Running" count={gaitKeyGroups.core.length + gaitKeyGroups.advanced.length + strideEntryOptions.length} defaultOpen>
-            <div className="space-y-4">
-              <div className="grid grid-cols-3 gap-1.5">
-                {strideEntryOptions.map((option) => {
-                  const active = strideEntryStyleRef.current === option.style;
+          <Section title="Body Stretch" count={PROPORTION_KEYS.length * 2} defaultOpen>
+            <div className="space-y-2">
+              <div className="rounded border border-ridge bg-shell px-3 py-2">
+                <div className="text-[7px] font-black uppercase tracking-[0.26em] text-mono-light">Per-part scaling</div>
+                <div className="mt-1 text-[7px] font-black uppercase tracking-[0.22em] text-ink">
+                  X stretches width. Y stretches height.
+                </div>
+              </div>
+
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setProportions(DEFAULT_PROPORTIONS)}
+                  className="rounded-full border border-ridge bg-white px-3 py-1 text-[7px] font-black uppercase tracking-[0.24em] text-ink transition-colors hover:bg-shell"
+                >
+                  Reset All
+                </button>
+              </div>
+
+              <div className="pointer-events-auto grid max-h-[24rem] grid-cols-1 gap-2 overflow-y-auto pr-1 custom-scrollbar">
+                {PROPORTION_KEYS.map((partKey) => {
+                  const partProportion = proportions[partKey];
+
                   return (
-                    <button
-                      key={option.style}
-                      type="button"
-                      onClick={() => updateStrideEntryStyle(option.style)}
-                      className={`rounded border px-2 py-2 text-left transition-all ${
-                        active ? 'border-selection bg-selection text-white shadow-md' : 'border-ridge bg-white hover:bg-shell'
-                      }`}
-                    >
-                      <div className="text-[8px] font-black tracking-[0.2em]">{option.label}</div>
-                      <div className={`mt-1 text-[6px] uppercase tracking-[0.18em] ${active ? 'text-white/70' : 'text-mono-light'}`}>
-                        {option.note}
+                    <div key={partKey} className="rounded border border-ridge/60 bg-white/75 p-2">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <span className="truncate text-[8px] font-black uppercase tracking-[0.2em] text-ink">
+                          {formatJointLabel(partKey)}
+                        </span>
+                        <span className="text-[7px] font-black uppercase tracking-[0.18em] text-mono-light">
+                          {Math.round(partProportion.w * 100)}% / {Math.round(partProportion.h * 100)}%
+                        </span>
                       </div>
-                    </button>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <RangeControl
+                          label="X Stretch"
+                          value={partProportion.w}
+                          min={0.35}
+                          max={2.5}
+                          step={0.01}
+                          onChange={(nextValue) => updateProportion(partKey, 'w', nextValue)}
+                          displayValue={`${Math.round(partProportion.w * 100)}%`}
+                          helper="Horizontal scale."
+                        />
+                        <RangeControl
+                          label="Y Stretch"
+                          value={partProportion.h}
+                          min={0.35}
+                          max={2.5}
+                          step={0.01}
+                          onChange={(nextValue) => updateProportion(partKey, 'h', nextValue)}
+                          displayValue={`${Math.round(partProportion.h * 100)}%`}
+                          helper="Vertical scale."
+                        />
+                      </div>
+                    </div>
                   );
                 })}
               </div>
+            </div>
+          </Section>
+
+          <Section title="Running" count={strideEntryOptions.length + gaitFamilyOptions.length + coreGaitKeys.length + shapeGaitKeys.length + advancedGaitKeys.length} defaultOpen>
+            <div className="space-y-4">
+              <div>
+                <div className="mb-2 text-[7px] font-black uppercase tracking-[0.24em] text-mono-light">Stride Entry</div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {strideEntryOptions.map((option) => {
+                    const active = strideEntryStyleRef.current === option.style;
+                    return (
+                      <button
+                        key={option.style}
+                        type="button"
+                        onClick={() => updateStrideEntryStyle(option.style)}
+                        className={`rounded border px-2 py-2 text-left transition-all ${
+                          active ? 'border-selection bg-selection text-white shadow-md' : 'border-ridge bg-white hover:bg-shell'
+                        }`}
+                      >
+                        <div className="text-[8px] font-black tracking-[0.2em]">{option.label}</div>
+                        <div className={`mt-1 text-[6px] uppercase tracking-[0.18em] ${active ? 'text-white/70' : 'text-mono-light'}`}>
+                          {option.note}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-2 text-[7px] font-black uppercase tracking-[0.24em] text-mono-light">Gait Families</div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {gaitFamilyOptions.map((option) => {
+                    const active = gaitFamilyRef.current === option.family;
+                    return (
+                      <button
+                        key={option.family}
+                        type="button"
+                        onClick={() => updateGaitFamily(option.family)}
+                        className={`rounded border px-2 py-2 text-left transition-all ${
+                          active ? 'border-selection bg-selection text-white shadow-md' : 'border-ridge bg-white hover:bg-shell'
+                        }`}
+                      >
+                        <div className="text-[8px] font-black tracking-[0.2em]">{option.label}</div>
+                        <div className={`mt-1 text-[6px] uppercase tracking-[0.18em] ${active ? 'text-white/70' : 'text-mono-light'}`}>
+                          {option.note}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
 
               <div className="space-y-3">
-                {gaitKeyGroups.core.map((key) => {
+                {coreGaitKeys.map((key) => {
                   const conf = gaitSliderConfig[key];
                   if (!conf) return null;
                   const strideBand = key === 'stride' ? STRIDE_BANDS[gaitModeRef.current] : null;
@@ -1065,9 +1478,35 @@ const App: React.FC = () => {
               </div>
 
               <div className="rounded border border-ridge bg-white/70 px-3 py-3">
+                <div className="mb-3 text-[7px] font-black uppercase tracking-[0.26em] text-mono-light">Gait Shape</div>
+                <div className="space-y-3">
+                  {shapeGaitKeys.map((key) => {
+                    const conf = gaitSliderConfig[key];
+                    if (!conf) return null;
+                    const isSymmetry = key === 'asymmetry';
+                    const displayValue = isSymmetry ? (1 - gait.asymmetry) : gait[key];
+
+                    return (
+                      <RangeControl
+                        key={key}
+                        label={conf.label}
+                        value={displayValue}
+                        min={conf.min}
+                        max={conf.max}
+                        step={conf.step}
+                        onChange={(nextValue) => updateDisplayedGaitValue(key, isSymmetry ? 1 - nextValue : nextValue)}
+                        displayValue={isSymmetry ? `${Math.round(displayValue * 100)}%` : gait[key].toFixed(2)}
+                        helper={isSymmetry ? 'Higher = more bilateral' : undefined}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="rounded border border-ridge bg-white/70 px-3 py-3">
                 <div className="mb-3 text-[7px] font-black uppercase tracking-[0.26em] text-mono-light">Advanced</div>
                 <div className="space-y-3">
-                  {gaitKeyGroups.advanced.map((key) => {
+                  {advancedGaitKeys.map((key) => {
                     const conf = gaitSliderConfig[key];
                     if (!conf) return null;
                     return (
@@ -1163,6 +1602,7 @@ const App: React.FC = () => {
                   type="button"
                   onClick={() => requestExport('frames')}
                   disabled={isExporting || Boolean(pendingExport)}
+                  aria-label="Export loop frames as a ZIP file"
                   className="rounded border border-selection bg-white px-3 py-2 text-[8px] font-black uppercase tracking-[0.18em] text-ink transition-all hover:bg-shell disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Loop Frames ZIP
@@ -1171,6 +1611,7 @@ const App: React.FC = () => {
                   type="button"
                   onClick={() => requestExport('keyframes')}
                   disabled={isExporting || Boolean(pendingExport)}
+                  aria-label="Export keyframes as a ZIP file"
                   className="rounded border border-selection bg-white px-3 py-2 text-[8px] font-black uppercase tracking-[0.18em] text-ink transition-all hover:bg-shell disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Keyframes ZIP
@@ -1179,10 +1620,11 @@ const App: React.FC = () => {
 
               <div className="flex items-center gap-2">
                 <label className="flex flex-1 items-center gap-2 rounded border border-ridge bg-white px-2 py-2 text-[8px] font-black uppercase tracking-[0.18em]">
-                  <span className="text-mono-light">Animated</span>
+                  <span className="text-mono-light">Animated format</span>
                   <select
                     value={exportFormat}
                     onChange={(event) => setExportFormat(event.target.value as AnimatedExportFormat)}
+                    aria-label="Animated export format"
                     className="ml-auto bg-transparent text-selection outline-none"
                   >
                     <option value="gif">GIF</option>
@@ -1193,6 +1635,8 @@ const App: React.FC = () => {
                   type="button"
                   onClick={() => setShowAnimatedExportPicker(true)}
                   disabled={isExporting || Boolean(pendingExport)}
+                  aria-haspopup="dialog"
+                  aria-controls="animated-export-fps-picker"
                   className="rounded border border-selection bg-selection px-3 py-2 text-[8px] font-black uppercase tracking-[0.18em] text-white transition-all hover:bg-selection-light disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {isExporting ? 'Exporting' : 'Export'}
@@ -1206,12 +1650,28 @@ const App: React.FC = () => {
           </Section>
 
           {showAnimatedExportPicker && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4">
-              <div className="w-full max-w-sm rounded-2xl border border-ridge bg-white p-4 shadow-2xl">
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4"
+              onClick={() => setShowAnimatedExportPicker(false)}
+            >
+              <div
+                id="animated-export-fps-picker"
+                ref={exportPickerRef}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="animated-export-title"
+                aria-describedby="animated-export-desc"
+                tabIndex={-1}
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') setShowAnimatedExportPicker(false);
+                }}
+                className="w-full max-w-sm rounded-2xl border border-ridge bg-white p-4 shadow-2xl"
+              >
                 <div className="flex items-start justify-between gap-3 border-b border-ridge pb-3">
                   <div>
-                    <div className="text-[9px] font-black uppercase tracking-[0.24em] text-ink">Animated Export FPS</div>
-                    <div className="mt-1 text-[7px] font-black uppercase tracking-[0.18em] text-mono-light">
+                    <div id="animated-export-title" className="text-[9px] font-black uppercase tracking-[0.24em] text-ink">Animated Export FPS</div>
+                    <div id="animated-export-desc" className="mt-1 text-[7px] font-black uppercase tracking-[0.18em] text-mono-light">
                       Choose the frame rate for GIF or WebM output.
                     </div>
                   </div>

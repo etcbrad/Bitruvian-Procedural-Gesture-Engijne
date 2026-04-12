@@ -20,15 +20,14 @@ interface MannequinStore {
   lotteSettings: LotteSettings;
   activePins: string[];
   gravityCenter: 'left' | 'center' | 'right';
-  vibeScale: number;
   
   setPose: (pose: StateUpdater<WalkingEnginePose>) => void;
   setGait: (gait: StateUpdater<WalkingEngineGait>) => void;
   setIdleSettings: (idleSettings: StateUpdater<IdleSettings>) => void;
   setPivotOffsets: (pivotOffsets: StateUpdater<WalkingEnginePivotOffsets>) => void;
+  setProportions: (proportions: StateUpdater<WalkingEngineProportions>) => void;
   setActivePins: (pins: StateUpdater<string[]>) => void;
   setGravityCenter: (center: 'left' | 'center' | 'right') => void;
-  setVibeScale: (scale: number) => void;
 }
 
 export const useMannequinStore = create<MannequinStore>((set) => ({
@@ -44,13 +43,12 @@ export const useMannequinStore = create<MannequinStore>((set) => ({
   lotteSettings: DEFAULT_LOTTE_SETTINGS,
   activePins: [],
   gravityCenter: 'center',
-  vibeScale: 1.0,
 
   setPose: (pose) => set((state) => ({ pose: resolveState(state.pose, pose) })),
   setGait: (gait) => set((state) => ({ gait: resolveState(state.gait, gait) })),
   setIdleSettings: (idleSettings) => set((state) => ({ idleSettings: resolveState(state.idleSettings, idleSettings) })),
   setPivotOffsets: (pivotOffsets) => set((state) => ({ pivotOffsets: resolveState(state.pivotOffsets, pivotOffsets) })),
+  setProportions: (proportions) => set((state) => ({ proportions: resolveState(state.proportions, proportions) })),
   setActivePins: (activePins) => set((state) => ({ activePins: resolveState(state.activePins, activePins) })),
   setGravityCenter: (gravityCenter) => set({ gravityCenter }),
-  setVibeScale: (vibeScale) => set({ vibeScale }),
 }));

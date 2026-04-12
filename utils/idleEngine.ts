@@ -124,6 +124,8 @@ export const updateIdlePhysics = (
     [PartName.RThigh]: plantFeet ? 0 : 8 + swayVal * 8 * settings.weightShift,
     [PartName.LAnkle]: plantFeet ? plantedFoot : -90,
     [PartName.RAnkle]: plantFeet ? plantedFoot : -90,
+    l_toe: 0,
+    r_toe: 0,
     x_offset: 0,
     y_offset: 0,
     neck: neckBias + _currentGazeX + _currentFidgetNeck,

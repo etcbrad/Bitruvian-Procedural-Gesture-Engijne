@@ -21,8 +21,8 @@ export const GAIT_PHYSICS = {
   WAIST_SWAY_RATIO: 0.3,
   WAIST_TWIST_BASE: 60,
   WAIST_TWIST_ARM_SWING_BONUS: 20,
-  TORSO_COUNTER_TWIST_BASE: 0.3,
-  TORSO_COUNTER_TWIST_SWIVEL_RANGE: 0.7,
+  TORSO_COUNTER_TWIST_BASE: 0.38,
+  TORSO_COUNTER_TWIST_SWIVEL_RANGE: 0.92,
   COLLAR_LEAN_COMPENSATION: 0.7,
   COLLAR_SWAY_COMPENSATION: 0.6,
   NECK_LEAN_COMPENSATION: 0.2,
@@ -33,7 +33,7 @@ export const GAIT_PHYSICS = {
   ARM_SPREAD_ANGLE: 40,
   ELBOW_LAG_RADIANS: 0.4, 
   ELBOW_WALK_BASE: 25,
-  ELBOW_RUN_BASE: 90,
+  ELBOW_RUN_BASE: 100,
   ELBOW_SNEAK_BASE: 115,
   WRIST_DRAG_FACTOR: 35,
   WRIST_FLICK_INTENSITY: 50,
@@ -50,14 +50,14 @@ export const GAIT_PHYSICS = {
   STANCE_TOE_OFF_ANGLE: -75,
   SWING_FOOT_DORSIFLEXION: -20,
   SWING_FOOT_GRAVITY_FACTOR: 0.5,
-  FOOT_DRAG_MAX_ANGLE: -45, 
+  FOOT_DRAG_MAX_ANGLE: -55, 
   TOE_BREAK_THRESHOLD_FACTOR: -30,
   TOE_BEND_MAX_ANGLE: 45,
   TOE_KICK_BONUS: 40,
   HOVER_HEIGHT_MULTIPLIER: 80,
   HOVER_AIR_FACTOR_BASE: 1.2,
-  HEAVY_STOMP_BOB_MULTIPLIER: 14,
-  FOOT_SPRING_BOB_MULTIPLIER: 10,
+  HEAVY_STOMP_BOB_MULTIPLIER: 18,
+  FOOT_SPRING_BOB_MULTIPLIER: 14,
   KICK_UP_KNEE_AMPLITUDE: 60,
   KICK_UP_FOOT_AMPLITUDE: 40,
   VERTICALITY_BOB_AMPLITUDE: 12,
@@ -84,6 +84,8 @@ export interface LocomotionState {
   smoothedRElbow: number;
   smoothedLWrist: number;
   smoothedRWrist: number;
+  smoothedLToe: number;
+  smoothedRToe: number;
   smoothedBodyRotation: number;
   prevYOffset: number;
 }
@@ -102,6 +104,8 @@ export const INITIAL_LOCOMOTION_STATE: LocomotionState = {
   smoothedRElbow: 0,
   smoothedLWrist: 0,
   smoothedRWrist: 0,
+  smoothedLToe: 0,
+  smoothedRToe: 0,
   smoothedBodyRotation: 0,
   prevYOffset: 0,
 };
@@ -141,11 +145,13 @@ const smooth01 = (t: number): number => {
   return x * x * (3 - 2 * x);
 };
 
+const wrapPhase = (phase: number): number => ((phase % (Math.PI * 2)) + (Math.PI * 2)) % (Math.PI * 2);
+
 const shapePendulum = (value: number, power: number = 0.78): number => {
   return Math.sign(value) * Math.pow(Math.abs(value), power);
 };
 
-const calculateLegAngles = (s: number, g: WalkingEngineGait, phase: number, wf: number) => {
+const calculateLegAngles = (phase: number, g: WalkingEngineGait, wf: number, isRight: boolean) => {
   const verticality = clamp(g.verticality, 0, 1);
   const kickUp = clamp(g.kick_up_force, 0, 1);
   const drag = clamp(g.footDrag, 0, 1);
@@ -153,28 +159,45 @@ const calculateLegAngles = (s: number, g: WalkingEngineGait, phase: number, wf: 
   const spring = clamp(g.footSpring, 0, 1);
   const footBend = clamp(g.feetAutoBend, 0, 1);
   const footStretch = clamp(g.feetAutoStretch, 0, 1);
-  const toeBend = clamp(g.toe_bend, 0, 1);
+  const asymmetry = clamp(g.asymmetry, 0, 1);
+  const limp = clamp(g.limp, 0, 1);
+  const limpBias = clamp(g.limp_bias, -1, 1);
+  const weightShift = clamp(g.weight_shift, 0, 1);
+  const stepExpression = clamp(g.step_expression, 0, 1);
+  const kneeBend = clamp(g.knee_bend, 0, 1.9);
   const frequencyEnergy = clamp((g.frequency - 0.1) / 2.0, 0, 1);
   const motionEnergy = clamp(
     0.1
       + (frequencyEnergy * 0.95)
       + (g.intensity * 0.12)
-      + (g.stride * 0.08),
+      + (g.stride * 0.08)
+      + (stepExpression * 0.08),
     0.1,
-    1.35,
+    1.4,
   );
-  const normalizedPhase = ((phase % (2 * Math.PI)) + (2 * Math.PI)) % (2 * Math.PI);
+  const sideSign = isRight ? 1 : -1;
+  const limpSideMatch = limpBias === 0
+    ? 0.35
+    : clamp(0.25 + (0.75 * Math.max(0, sideSign * limpBias)), 0.25, 1);
+  const phaseShift = (sideSign * asymmetry * 0.28) + (sideSign * limpBias * limp * 0.18);
+  const normalizedPhase = wrapPhase(phase + phaseShift);
   const gaitCycle = normalizedPhase / (2 * Math.PI);
+  const gaitSwing = Math.sin(normalizedPhase);
+  const kneeCurve = lerp(0.92, 1.18, clamp((kneeBend - 0.7) / 0.9, 0, 1));
+  const stepExpressionDrive = 1 + (stepExpression * 0.34);
 
   const hipMult = (GAIT_PHYSICS.HIP_BASE_MULTIPLIER + (g.stride * GAIT_PHYSICS.HIP_STRIDE_FACTOR)) * 
                   (GAIT_PHYSICS.HIP_INTENSITY_BASE + g.intensity * GAIT_PHYSICS.HIP_INTENSITY_FACTOR);
-  let hip = s * hipMult;
+  const strideExpression = stepExpressionDrive;
+  const limpPenalty = 1 - (limp * limpSideMatch * 0.4);
+  let hip = gaitSwing * hipMult * strideExpression * limpPenalty;
   let knee = 6;
   let foot = -90;
 
-  const isStance = s < 0;
+  const isStance = gaitSwing < 0;
   const cyclePhase = isStance ? gaitCycle : (gaitCycle + 0.5) % 1;
-  const toeBias = clamp((g.foot_roll * 0.75) + (kickUp * 0.5) + (spring * 0.2) - (drag * 0.24), 0, 1);
+  const footExpression = clamp((g.foot_roll * 0.75) + (kickUp * 0.5) + (spring * 0.24) - (drag * 0.24) + (stepExpression * 0.28), 0, 1);
+  const toeBias = footExpression;
   const initialStrike = lerp(GAIT_PHYSICS.STANCE_TOE_STRIKE_ANGLE, GAIT_PHYSICS.STANCE_HEEL_STRIKE_ANGLE, 1 - toeBias);
 
   if (isStance) {
@@ -183,59 +206,71 @@ const calculateLegAngles = (s: number, g: WalkingEngineGait, phase: number, wf: 
     const pushOff = smooth01((cyclePhase - 0.58) / 0.26);
     const release = smooth01((cyclePhase - 0.84) / 0.16);
     const gravityBias = clamp(g.gravity * (1 - verticality * GAIT_PHYSICS.VERTICALITY_GRAVITY_DAMPENING), 0, 1);
-    const loadBend = (6 + gravityBias * 10 + stomp * 3) * motionEnergy;
-    const midBend = lerp(loadBend, 4 + verticality * 4 + spring * 2, midStance);
-    const pushOffBend = (8 + kickUp * 8 + spring * 5 + footBend * 2) * motionEnergy;
+    const loadBend = (6 + gravityBias * 10 + stomp * 3 + limp * limpSideMatch * 10) * motionEnergy;
+    const midBend = lerp(loadBend, 4 + verticality * 4 + spring * 2 + stepExpression * 4.5, midStance);
+    const pushOffBend = (8 + kickUp * 8 + spring * 5 + footBend * 2 + stepExpression * 6) * motionEnergy;
 
     knee = lerp(loadBend, midBend, loading);
     knee = lerp(knee, pushOffBend, pushOff);
-    knee = lerp(knee, 4 + verticality * 2.5, release);
-    knee *= wf;
+    knee = lerp(knee, 4 + verticality * 2.5 + limp * limpSideMatch * 3, release);
+    knee *= wf * kneeCurve;
     knee = clamp(knee, 2, 28);
 
-    const strikeSettle = lerp(initialStrike - toeBend * 3.5, initialStrike * 0.42, midStance);
+    const strikeSettle = lerp(initialStrike - stepExpression * 3.5, initialStrike * 0.42, midStance);
     const toeRoll = lerp(0, GAIT_PHYSICS.STANCE_TOE_OFF_ANGLE, pushOff)
-      * (g.foot_roll * 0.82 + kickUp * 0.2 + spring * 0.2 + toeBend * 0.2);
-    const toeFlex = toeBend * GAIT_PHYSICS.TOE_BEND_MAX_ANGLE * (0.08 + release * 0.22);
-    const pushOffRoll = smooth01((cyclePhase - 0.44) / 0.18) * (4 + kickUp * 3 + spring * 2 + drag * 2);
-    foot += strikeSettle + (toeRoll * 0.48) - toeFlex + stomp * 2.1 - drag * 1.8 + pushOffRoll;
+      * (g.foot_roll * 0.82 + kickUp * 0.2 + spring * 0.2 + stepExpression * 0.28);
+    const pushOffRoll = smooth01((cyclePhase - 0.44) / 0.18) * (4 + kickUp * 3 + spring * 2 + drag * 2 + stepExpression * 4);
+    const limpDrag = limp * limpSideMatch * 6;
+    foot += strikeSettle + (toeRoll * 0.48) + stomp * 2.1 - drag * 3.2 - limpDrag + pushOffRoll;
   } else {
     const lift = smooth01(cyclePhase / 0.18);
     const pass = smooth01((cyclePhase - 0.16) / 0.3);
     const reach = smooth01((cyclePhase - 0.58) / 0.32);
     const airFactor = clamp(GAIT_PHYSICS.HOVER_AIR_FACTOR_BASE - (g.gravity * 0.6) + (verticality * 0.35) + (spring * 0.15), 0.15, 1.8);
-    const swingCarry = clamp(0.25 + frequencyEnergy * 0.85, 0.25, 1);
-    const hLift = g.hover_height * GAIT_PHYSICS.HOVER_HEIGHT_MULTIPLIER * swingCarry * (0.08 + lift * 0.18) * airFactor * (0.35 + verticality * 0.35 + kickUp * 0.2);
-    hip -= hLift * (0.3 + lift * 0.14);
+    const swingCarry = clamp(0.25 + frequencyEnergy * 0.85 + stepExpression * 0.12, 0.25, 1.1);
+    const hLift = g.hover_height * GAIT_PHYSICS.HOVER_HEIGHT_MULTIPLIER * swingCarry * (0.08 + lift * 0.18 + stepExpression * 0.08) * airFactor * (0.35 + verticality * 0.35 + kickUp * 0.2);
+    hip -= hLift * (0.3 + lift * 0.14) * limpPenalty;
 
-    const liftBend = (10 + g.stride * 6 + kickUp * 10 + spring * 4) * swingCarry;
-    const passBend = (22 + g.stride * 7 + kickUp * 8) * swingCarry;
-    const reachBend = 8 + verticality * 6 + footStretch * 4;
+    const liftBend = (10 + g.stride * 6 + kickUp * 10 + spring * 4 + stepExpression * 5) * swingCarry;
+    const passBend = (22 + g.stride * 7 + kickUp * 8 + stepExpression * 4) * swingCarry;
+    const reachBend = 8 + verticality * 6 + footStretch * 4 - stepExpression * 1.5;
     knee = lerp(liftBend, passBend, pass);
     knee = lerp(knee, reachBend, reach);
-    knee = lerp(knee, 10 + verticality * 4, smooth01((cyclePhase - 0.84) / 0.16));
+    knee = lerp(knee, 10 + verticality * 4 + limp * limpSideMatch * 5, smooth01((cyclePhase - 0.84) / 0.16));
     knee += hLift * 0.06;
     knee += spring * 3.5 * swingCarry;
+    knee *= limpPenalty * kneeCurve;
     knee = clamp(knee, 5, 44);
 
-    const swingLift = kickUp * GAIT_PHYSICS.KICK_UP_FOOT_AMPLITUDE * swingCarry * (0.1 + lift * 0.18);
-    const swingFlex = toeBend * GAIT_PHYSICS.TOE_BEND_MAX_ANGLE * (0.08 + lift * 0.22 + pass * 0.06);
-    const swingRelax = smooth01((cyclePhase - 0.68) / 0.24) * (toeBend * 3 + footStretch * 2.5);
-    const swingSettle = smooth01((cyclePhase - 0.16) / 0.34) * (8 + drag * 3 + footStretch * 2.5);
+    const swingLift = kickUp * GAIT_PHYSICS.KICK_UP_FOOT_AMPLITUDE * swingCarry * (0.1 + lift * (0.18 + stepExpression * 0.1));
+    const swingFlex = stepExpression * GAIT_PHYSICS.TOE_BEND_MAX_ANGLE * (0.08 + lift * 0.28 + pass * 0.1);
+    const swingRelax = smooth01((cyclePhase - 0.68) / 0.24) * (stepExpression * 4 + footStretch * 2.5);
+    const swingSettle = smooth01((cyclePhase - 0.16) / 0.34) * (8 + drag * 5 + footStretch * 2.5 + stepExpression * 4);
 
-    foot += swingLift;
+    foot += swingLift * limpPenalty;
     foot -= swingFlex;
     foot += footBend * GAIT_PHYSICS.FOOT_AUTO_BEND_MULTIPLIER * (0.1 + pass * 0.42);
     foot -= footStretch * GAIT_PHYSICS.FOOT_AUTO_STRETCH_MULTIPLIER * reach * (0.2 + pass * 0.22);
-    foot += drag * GAIT_PHYSICS.FOOT_DRAG_MAX_ANGLE * (0.04 + pass * 0.12);
+    foot += drag * GAIT_PHYSICS.FOOT_DRAG_MAX_ANGLE * (0.08 + pass * 0.22 + limp * limpSideMatch * 0.1);
     foot += swingRelax * 0.35;
     foot += swingSettle;
+  }
+
+  let toe = 0;
+  if (isStance) {
+    const pushOff = smooth01((cyclePhase - 0.58) / 0.26);
+    toe = pushOff * (12 + stepExpression * 12);
+  } else {
+    const lift = smooth01(cyclePhase / 0.18);
+    const pass = smooth01((cyclePhase - 0.16) / 0.3);
+    toe = (15 + kickUp * 25 + spring * 10 + stepExpression * 11) * lift * (1 - pass * 0.5);
   }
 
   return {
     hip,
     knee,
-    foot: clamp(foot, -106, -64),
+    foot: clamp(foot, -114, -60),
+    toe: clamp(toe, 0, 45),
   };
 };
 
@@ -286,6 +321,11 @@ export const updateLocomotionPhysics = (
   const drag = clamp(g('footDrag'), 0, 1);
   const stomp = clamp(g('heavyStomp'), 0, 1);
   const spring = clamp(g('footSpring'), 0, 1);
+  const asymmetry = clamp(g('asymmetry'), 0, 1);
+  const limp = clamp(g('limp'), 0, 1);
+  const limpBias = clamp(g('limp_bias'), -1, 1);
+  const weightShift = clamp(g('weight_shift'), 0, 1);
+  const stepExpression = clamp(g('step_expression'), 0, 1);
   const headSpin = g('head_spin');
   const headAutoBend = g('headAutoBend');
   const headAutoStretch = g('headAutoStretch');
@@ -294,43 +334,52 @@ export const updateLocomotionPhysics = (
     0.1
       + (frequencyEnergy * 0.95)
       + (g('intensity') * 0.12)
-      + (g('stride') * 0.08),
+      + (g('stride') * 0.08)
+      + (stepExpression * 0.08),
     0.1,
-    1.35,
+    1.4,
   );
 
   state.smoothedTorsoLean = lerp(
     state.smoothedTorsoLean,
     (g('lean') * GAIT_PHYSICS.BODY_LEAN_MULTIPLIER)
       + (upperBodyLean * GAIT_PHYSICS.UPPER_BODY_LEAN_MULTIPLIER)
-      + (sVal * GAIT_PHYSICS.BODY_LEAN_OSCILLATION_AMPLITUDE * g('intensity') * (0.6 + verticality * 0.6)),
+      + (sVal * GAIT_PHYSICS.BODY_LEAN_OSCILLATION_AMPLITUDE * g('intensity') * (0.6 + verticality * 0.6))
+      + ((weightShift - 0.25) * 12)
+      + (limpBias * limp * 8)
+      + (asymmetry * 5),
     alpha,
   );
   const swayMag = GAIT_PHYSICS.HIP_SWAY_BASE_MAG_MOD * g('hip_sway') * g('intensity');
-  state.smoothedBodySwayX = lerp(state.smoothedBodySwayX, sVal * swayMag, alpha);
-  state.smoothedWaistSway = lerp(state.smoothedWaistSway, -sVal * swayMag * GAIT_PHYSICS.WAIST_SWAY_RATIO, alpha);
-  state.smoothedWaistTwist = lerp(state.smoothedWaistTwist, cStride * (GAIT_PHYSICS.WAIST_TWIST_BASE + g('arm_swing') * GAIT_PHYSICS.WAIST_TWIST_ARM_SWING_BONUS) * g('waist_twist') * g('intensity'), alpha);
+  state.smoothedBodySwayX = lerp(state.smoothedBodySwayX, (sVal * swayMag * (1 + weightShift * 0.55)) + (limpBias * limp * 6) + (asymmetry * 6), alpha);
+  state.smoothedWaistSway = lerp(state.smoothedWaistSway, (-sVal * swayMag * GAIT_PHYSICS.WAIST_SWAY_RATIO * (1 + weightShift * 0.25)) + (limpBias * limp * 4) - (asymmetry * 4), alpha);
+  state.smoothedWaistTwist = lerp(state.smoothedWaistTwist, cStride * (GAIT_PHYSICS.WAIST_TWIST_BASE + g('arm_swing') * GAIT_PHYSICS.WAIST_TWIST_ARM_SWING_BONUS) * g('waist_twist') * g('intensity') * (1 + stepExpression * 0.15) + (asymmetry * 10), alpha);
   state.smoothedBodyRotation = lerp(
     state.smoothedBodyRotation,
     (upperBodyLean * GAIT_PHYSICS.BODY_ROTATION_MULTIPLIER)
       + (state.smoothedWaistTwist * 0.08)
-      + (sVal * (verticality - 0.5) * 8),
+      + (sVal * (verticality - 0.5) * 8)
+      + ((weightShift - 0.25) * 10)
+      + (limpBias * limp * 6)
+      + (asymmetry * 8),
     alpha,
   );
   state.smoothedBobbing = lerp(
     state.smoothedBobbing,
-    Math.sin(p * 2) * GAIT_PHYSICS.VERTICALITY_BOB_AMPLITUDE * (0.18 + verticality * 0.42)
-      - stomp * (GAIT_PHYSICS.HEAVY_STOMP_BOB_MULTIPLIER * 0.45)
-      + spring * (GAIT_PHYSICS.FOOT_SPRING_BOB_MULTIPLIER * 0.35)
-      - drag * 1.5,
+    Math.sin(p * 2) * GAIT_PHYSICS.VERTICALITY_BOB_AMPLITUDE * (0.18 + verticality * 0.42 + stepExpression * 0.12)
+      - stomp * (GAIT_PHYSICS.HEAVY_STOMP_BOB_MULTIPLIER * 0.55)
+      + spring * (GAIT_PHYSICS.FOOT_SPRING_BOB_MULTIPLIER * 0.45)
+      - drag * 2.25
+      - limp * 1.1,
     alpha,
   );
   
   const swingMag = (GAIT_PHYSICS.ARM_SWING_BASE + (g('stride') * GAIT_PHYSICS.ARM_SWING_STRIDE_FACTOR))
     * (GAIT_PHYSICS.ARM_SWING_INTENSITY_BASE + g('intensity') * GAIT_PHYSICS.ARM_SWING_INTENSITY_FACTOR)
     * g('arm_swing')
-    * motionEnergy;
-  const shoulderSwingEnvelope = clamp(0.74 + (g('frequency') * 0.22) + (g('arm_swing') * 0.16), 0.68, 1.28);
+    * motionEnergy
+    * (1 + stepExpression * 0.35);
+  const shoulderSwingEnvelope = clamp(0.74 + (g('frequency') * 0.22) + (g('arm_swing') * 0.16) + (weightShift * 0.1) + (stepExpression * 0.08), 0.68, 1.4);
   const shoulderArcL = shapePendulum(cStride);
   const shoulderArcR = shapePendulum(sVal);
   
@@ -355,11 +404,14 @@ export const updateLocomotionPhysics = (
   state.smoothedLElbow = lerp(state.smoothedLElbow, getElbow(lagL), alpha);
   state.smoothedRElbow = lerp(state.smoothedRElbow, getElbow(lagR), alpha);
 
-  const lLeg = calculateLegAngles(sVal, gait, p, weightFactor);
-  const rLeg = calculateLegAngles(cStride, gait, p + Math.PI, weightFactor);
+  const lLeg = calculateLegAngles(p, gait, weightFactor, false);
+  const rLeg = calculateLegAngles(p + Math.PI, gait, weightFactor, true);
   const footAlpha = clamp(alpha * 1.4 + 0.08, 0, 1);
   state.smoothedLFoot = lerp(state.smoothedLFoot, lLeg.foot, footAlpha);
   state.smoothedRFoot = lerp(state.smoothedRFoot, rLeg.foot, footAlpha);
+  // Smooth toe angles with same alpha as feet for consistency
+  state.smoothedLToe = lerp(state.smoothedLToe, lLeg.toe, footAlpha);
+  state.smoothedRToe = lerp(state.smoothedRToe, rLeg.toe, footAlpha);
 
   const tTwist = -state.smoothedWaistTwist * (GAIT_PHYSICS.TORSO_COUNTER_TWIST_BASE + g('torso_swivel') * GAIT_PHYSICS.TORSO_COUNTER_TWIST_SWIVEL_RANGE);
   const finalTorso = state.smoothedTorsoLean + tTwist + state.smoothedWaistSway + (upperBodyLean * 8);
@@ -377,13 +429,13 @@ export const updateLocomotionPhysics = (
     torso: finalTorso,
     collar: finalCollar,
     neck: finalNeck,
-    l_shoulder: shoulderArcL * swingMag * shoulderSwingEnvelope - g('arm_spread') * GAIT_PHYSICS.ARM_SPREAD_ANGLE,
-    r_shoulder: shoulderArcR * swingMag * shoulderSwingEnvelope + g('arm_spread') * GAIT_PHYSICS.ARM_SPREAD_ANGLE,
+    l_shoulder: shoulderArcL * swingMag * shoulderSwingEnvelope - g('arm_spread') * GAIT_PHYSICS.ARM_SPREAD_ANGLE - (limpBias * limp * 6),
+    r_shoulder: shoulderArcR * swingMag * shoulderSwingEnvelope + g('arm_spread') * GAIT_PHYSICS.ARM_SPREAD_ANGLE + (limpBias * limp * 6),
     l_elbow: state.smoothedLElbow,
     r_elbow: state.smoothedRElbow,
     l_hand: lHand,
     r_hand: rHand,
-    l_hip: lLeg.hip, l_knee: lLeg.knee, l_foot: state.smoothedLFoot,
-    r_hip: rLeg.hip, r_knee: rLeg.knee, r_foot: state.smoothedRFoot,
+    l_hip: lLeg.hip, l_knee: lLeg.knee, l_foot: state.smoothedLFoot, l_toe: state.smoothedLToe,
+    r_hip: rLeg.hip, r_knee: rLeg.knee, r_foot: state.smoothedRFoot, r_toe: state.smoothedRToe,
   };
 };

@@ -58,7 +58,7 @@ export const TIMING = {
 export const UI = {
   DEFAULT_ZOOM_INDEX: 4,
   ZOOM_LEVELS: [0.1, 0.2, 0.35, 0.5, 0.75, 1, 1.25, 1.5, 2.0, 3.0, 4.0],
-  BASE_VIEWBOX: { x: -500, y: -1023, width: 1000, height: 1103 },
+  BASE_VIEWBOX: { x: -500, y: -2000, width: 1000, height: 2300 },
 };
 
 export const IDLE_PHYSICS = {
@@ -135,7 +135,7 @@ export const DEFAULT_RESTING_POSE: WalkingEnginePose = {
   l_hand: 0, r_hand: 0, 
   l_hip: 0, r_hip: 0, 
   l_knee: 10, r_knee: 10, 
-  l_foot: -90, r_foot: -90, stride_phase: 0, y_offset: 0, x_offset: 0 
+  l_foot: -90, r_foot: -90, l_toe: 0, r_toe: 0, stride_phase: 0, y_offset: 0, x_offset: 0 
 };
 
 export const DEFAULT_IDLE_SETTINGS: IdleSettings = { 

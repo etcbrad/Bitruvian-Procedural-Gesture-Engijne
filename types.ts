@@ -35,6 +35,7 @@ export type WalkingEnginePose = {
   l_hip: number; r_hip: number;
   l_knee: number; r_knee: number;
   l_foot: number; r_foot: number;
+  l_toe: number; r_toe: number;
   stride_phase: number;
   y_offset: number;
   x_offset: number;
@@ -59,12 +60,17 @@ export type WalkingEngineGait = {
   waist_twist: number;
   arm_swing: number;
   elbow_bend: number;
+  knee_bend: number;
   gravity: number;
   verticality: number;
   kick_up_force: number;
   foot_roll: number;
   hover_height: number;
-  toe_bend: number;
+  asymmetry: number;
+  limp: number;
+  limp_bias: number;
+  weight_shift: number;
+  step_expression: number;
   torso_swivel: number;
   head_spin: number;
   footDrag: number;

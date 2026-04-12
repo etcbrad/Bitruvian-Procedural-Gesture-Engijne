@@ -29,8 +29,6 @@ interface MannequinProps {
   jointModes: JointModesState;
   lotteSettings: LotteSettings;
   isExploded?: boolean;
-  ghosts?: { phase: number; color: string; opacity: number }[];
-  ghostDataGenerator?: (phase: number) => Partial<WalkingEnginePose>;
 }
 
 const RENDER_ORDER: (keyof WalkingEngineProportions)[] = [
